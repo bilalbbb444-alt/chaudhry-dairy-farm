@@ -589,6 +589,17 @@ export default function ChaudhryDairyFarm() {
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState(null);
   const [unlocked, setUnlocked] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState(null);
+
+  // ---- PWA install prompt capture (Android/desktop Chrome) ----
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
 
   // ---- Auth session ----
   useEffect(() => {
@@ -744,7 +755,7 @@ export default function ChaudhryDairyFarm() {
         <ReportsScreen data={data} setData={setData} onBack={() => setMoreScreen(null)} notify={notify} />
       )}
       {tab === "more" && moreScreen === "settings" && (
-        <SettingsScreen data={data} setData={setData} role={role} onBack={() => setMoreScreen(null)} onSignOut={signOut} userEmail={session.user.email} />
+        <SettingsScreen data={data} setData={setData} role={role} onBack={() => setMoreScreen(null)} onSignOut={signOut} userEmail={session.user.email} installPrompt={installPrompt} onInstalled={() => setInstallPrompt(null)} />
       )}
 
       {modal === "addMilk" && (
@@ -2342,10 +2353,26 @@ function ReportsScreen({ data, setData, onBack, notify }) {
 /* ---------------------------------------------------------------- */
 /*  Settings                                                           */
 /* ---------------------------------------------------------------- */
-function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail }) {
+function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail, installPrompt, onInstalled }) {
   const s = data.settings;
   const patch = (k, v) => setData((d) => ({ ...d, settings: { ...d.settings, [k]: v } }));
   const [copied, setCopied] = useState(false);
+  const [installing, setInstalling] = useState(false);
+
+  const isStandalone = typeof window !== "undefined" && (window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
+  const isIOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+  const doInstall = async () => {
+    if (!installPrompt) return;
+    setInstalling(true);
+    installPrompt.prompt();
+    try {
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === "accepted") onInstalled && onInstalled();
+    } finally {
+      setInstalling(false);
+    }
+  };
 
   // Debounced sync of settings -> farms table
   useEffect(() => {
@@ -2376,6 +2403,29 @@ function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail }) {
   return (
     <Screen>
       <TopBar title="Settings" subtitle={`Signed in as ${role}`} onBack={onBack} />
+
+      <Card className="mb-4">
+        <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>GET THE APP</p>
+        {isStandalone ? (
+          <div className="flex items-center gap-2">
+            <Badge tone="green">Installed</Badge>
+            <p className="text-[11px]" style={{ color: C.gray }}>You're using the installed app.</p>
+          </div>
+        ) : installPrompt ? (
+          <>
+            <p className="text-[11px] mb-3" style={{ color: C.gray }}>Install Chaudhry Dairy Farm on this device for quick access from your home screen, like a regular app.</p>
+            <Btn full onClick={doInstall} disabled={installing}>{installing ? "Installing…" : "Install App"}</Btn>
+          </>
+        ) : isIOS ? (
+          <p className="text-[11px]" style={{ color: C.gray }}>
+            To install: tap the <strong>Share</strong> button in Safari, then choose <strong>"Add to Home Screen"</strong>.
+          </p>
+        ) : (
+          <p className="text-[11px]" style={{ color: C.gray }}>
+            Open your browser menu and choose <strong>"Install App"</strong> or <strong>"Add to Home Screen"</strong>.
+          </p>
+        )}
+      </Card>
 
       <Card className="mb-4">
         <div className="flex items-center gap-3 mb-3">
