@@ -80,6 +80,9 @@ const TABLES = {
   employees: "employees",
   salaryPayments: "salary_payments",
   closings: "daily_closings",
+  health: "animal_health",
+  vaccinations: "vaccinations",
+  breeding: "breeding_records",
 };
 
 // Set once per session right after the user's farm membership is resolved.
@@ -131,7 +134,7 @@ function farmRowToSettings(farm) {
 }
 
 async function fetchFarmData(farmId) {
-  const [farm, animals, milk, customers, sales, custPayments, inventory, purchases, expenses, employees, salaryPayments, closings] =
+  const [farm, animals, milk, customers, sales, custPayments, inventory, purchases, expenses, employees, salaryPayments, closings, health, vaccinations, breeding] =
     await Promise.all([
       supabase.from("farms").select("*").eq("id", farmId).single(),
       supabase.from("animals").select("*").eq("farm_id", farmId),
@@ -145,6 +148,9 @@ async function fetchFarmData(farmId) {
       supabase.from("employees").select("*").eq("farm_id", farmId),
       supabase.from("salary_payments").select("*").eq("farm_id", farmId),
       supabase.from("daily_closings").select("*").eq("farm_id", farmId),
+      supabase.from("animal_health").select("*").eq("farm_id", farmId),
+      supabase.from("vaccinations").select("*").eq("farm_id", farmId),
+      supabase.from("breeding_records").select("*").eq("farm_id", farmId),
     ]);
   if (farm.error) throw farm.error;
   return {
@@ -160,6 +166,9 @@ async function fetchFarmData(farmId) {
     employees: (employees.data || []).map(rowToCamel),
     salaryPayments: (salaryPayments.data || []).map(rowToCamel),
     closings: (closings.data || []).map(rowToCamel),
+    health: (health.data || []).map(rowToCamel),
+    vaccinations: (vaccinations.data || []).map(rowToCamel),
+    breeding: (breeding.data || []).map(rowToCamel),
   };
 }
 
@@ -882,6 +891,7 @@ function Dashboard({ data, role, setModal, goMore }) {
     const paid = data.salaryPayments.filter((p) => p.employeeId === e.id && p.month === today().slice(0, 7)).reduce((s, p) => s + p.paidAmount, 0);
     return paid < e.salary;
   });
+  const vaccinationsDue = data.vaccinations.filter((v) => v.nextDueDate && v.nextDueDate <= daysAgo(-7));
 
   return (
     <Screen>
@@ -929,7 +939,17 @@ function Dashboard({ data, role, setModal, goMore }) {
         {data.animals.some((a) => a.status === "Sick") && (
           <AlertRow title="Animal under treatment" detail={data.animals.filter((a) => a.status === "Sick").map((a) => `${a.name} (${a.code})`).join(", ")} onClick={() => goMore("animals")} />
         )}
-        {lowStock.length === 0 && overdueCustomers.length === 0 && salaryDue.length === 0 && !data.animals.some((a) => a.status === "Sick") && (
+        {vaccinationsDue.length > 0 && (
+          <AlertRow
+            title={`Vaccination due/overdue for ${vaccinationsDue.length} animal(s)`}
+            detail={vaccinationsDue.map((v) => {
+              const a = data.animals.find((x) => x.id === v.animalId);
+              return `${a ? a.name : "Unknown"} — ${v.vaccine} (${fmtDate(v.nextDueDate)})`;
+            }).join(", ")}
+            onClick={() => goMore("animals")}
+          />
+        )}
+        {lowStock.length === 0 && overdueCustomers.length === 0 && salaryDue.length === 0 && vaccinationsDue.length === 0 && !data.animals.some((a) => a.status === "Sick") && (
           <p className="text-xs" style={{ color: C.grayLight }}>No alerts right now. Everything looks good.</p>
         )}
       </div>
@@ -1765,12 +1785,228 @@ function AnimalProfile({ data, setData, animalId, onBack, notify }) {
         <Row label="Purchase Date" value={a.purchaseDate ? fmtDate(a.purchaseDate) : "—"} />
         <Row label="Purchase Price" value={fmt(a.purchasePrice)} />
       </Card>
-      <Card>
-        <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>HEALTH & BREEDING</p>
-        <p className="text-xs" style={{ color: C.grayLight }}>No veterinary or breeding records yet.</p>
-      </Card>
+
+      <AnimalHealthSection data={data} setData={setData} animal={a} notify={notify} />
+      <AnimalVaccinationSection data={data} setData={setData} animal={a} notify={notify} />
+      <AnimalBreedingSection data={data} setData={setData} animal={a} notify={notify} />
+
       {showEdit && <AnimalModal setData={setData} animal={a} onClose={() => setShowEdit(false)} notify={notify} />}
     </Screen>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/*  Animal Health / Vaccination / Breeding                            */
+/* ---------------------------------------------------------------- */
+function AnimalHealthSection({ data, setData, animal, notify }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const records = data.health.filter((h) => h.animalId === animal.id).sort((a, b) => b.date.localeCompare(a.date));
+
+  const remove = async (id) => {
+    try { await dbDelete("health", id); setData((d) => ({ ...d, health: d.health.filter((h) => h.id !== id) })); }
+    catch (e) { notify("Could not delete record"); }
+  };
+
+  return (
+    <Card className="mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold" style={{ color: C.gray }}>VETERINARY & TREATMENTS</p>
+        <button onClick={() => setShowAdd(true)} className="p-1.5 rounded-full" style={{ background: C.greenPale }}><Plus size={14} color={C.green} /></button>
+      </div>
+      {records.length === 0 ? (
+        <p className="text-xs" style={{ color: C.grayLight }}>No veterinary records yet.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {records.map((h) => (
+            <div key={h.id} className="rounded-xl p-2.5" style={{ background: C.creamDark }}>
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-xs font-semibold" style={{ color: C.text }}>{h.type}{h.problem ? ` — ${h.problem}` : ""}</p>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px]" style={{ color: C.gray }}>{fmtDate(h.date)}</span>
+                  <RowActions onDelete={() => remove(h.id)} />
+                </div>
+              </div>
+              <p className="text-[11px]" style={{ color: C.gray }}>
+                {[h.doctor && `Dr. ${h.doctor}`, h.medicine, h.cost ? fmt(h.cost) : null].filter(Boolean).join(" · ")}
+              </p>
+              {h.nextDate && <p className="text-[10px] mt-1" style={{ color: C.warn }}>Follow-up: {fmtDate(h.nextDate)}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      {showAdd && <HealthModal setData={setData} animal={animal} onClose={() => setShowAdd(false)} notify={notify} />}
+    </Card>
+  );
+}
+
+function HealthModal({ setData, animal, onClose, notify }) {
+  const [f, setF] = useState({ type: "Checkup", doctor: "", problem: "", medicine: "", cost: "", nextDate: "", notes: "" });
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    try {
+      const row = await dbInsert("health", { animalId: animal.id, date: today(), type: f.type, doctor: f.doctor, problem: f.problem, medicine: f.medicine, cost: parseFloat(f.cost) || 0, nextDate: f.nextDate || null, notes: f.notes });
+      setData((d) => ({ ...d, health: [...d.health, row] }));
+      onClose();
+    } catch (e) { notify("Could not save record"); } finally { setSaving(false); }
+  };
+  return (
+    <Sheet title="Add Veterinary Record" onClose={onClose} footer={<Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Record"}</Btn>}>
+      <Field label="Type">
+        <select className={inputCls} style={inputStyle} value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>
+          <option>Checkup</option><option>Illness</option><option>Injury</option><option>Deworming</option><option>Other</option>
+        </select>
+      </Field>
+      <Field label="Doctor"><input className={inputCls} style={inputStyle} value={f.doctor} onChange={(e) => setF({ ...f, doctor: e.target.value })} /></Field>
+      <Field label="Problem / Diagnosis"><input className={inputCls} style={inputStyle} value={f.problem} onChange={(e) => setF({ ...f, problem: e.target.value })} /></Field>
+      <Field label="Medicine Given"><input className={inputCls} style={inputStyle} value={f.medicine} onChange={(e) => setF({ ...f, medicine: e.target.value })} /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Cost"><input type="number" className={inputCls} style={inputStyle} value={f.cost} onChange={(e) => setF({ ...f, cost: e.target.value })} /></Field>
+        <Field label="Follow-up Date"><input type="date" className={inputCls} style={inputStyle} value={f.nextDate} onChange={(e) => setF({ ...f, nextDate: e.target.value })} /></Field>
+      </div>
+      <Field label="Notes"><input className={inputCls} style={inputStyle} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field>
+    </Sheet>
+  );
+}
+
+function AnimalVaccinationSection({ data, setData, animal, notify }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const records = data.vaccinations.filter((v) => v.animalId === animal.id).sort((a, b) => b.date.localeCompare(a.date));
+
+  const remove = async (id) => {
+    try { await dbDelete("vaccinations", id); setData((d) => ({ ...d, vaccinations: d.vaccinations.filter((v) => v.id !== id) })); }
+    catch (e) { notify("Could not delete record"); }
+  };
+
+  return (
+    <Card className="mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold" style={{ color: C.gray }}>VACCINATIONS</p>
+        <button onClick={() => setShowAdd(true)} className="p-1.5 rounded-full" style={{ background: C.greenPale }}><Plus size={14} color={C.green} /></button>
+      </div>
+      {records.length === 0 ? (
+        <p className="text-xs" style={{ color: C.grayLight }}>No vaccination records yet.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {records.map((v) => {
+            const overdue = v.nextDueDate && v.nextDueDate < today();
+            const dueSoon = v.nextDueDate && !overdue && v.nextDueDate <= daysAgo(-7);
+            return (
+              <div key={v.id} className="rounded-xl p-2.5" style={{ background: C.creamDark }}>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs font-semibold" style={{ color: C.text }}>{v.vaccine}</p>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px]" style={{ color: C.gray }}>{fmtDate(v.date)}</span>
+                    <RowActions onDelete={() => remove(v.id)} />
+                  </div>
+                </div>
+                {v.doctor && <p className="text-[11px]" style={{ color: C.gray }}>Dr. {v.doctor}</p>}
+                {v.nextDueDate && (
+                  <p className="text-[10px] mt-1" style={{ color: overdue ? C.danger : dueSoon ? C.warn : C.gray }}>
+                    Next due: {fmtDate(v.nextDueDate)}{overdue ? " — overdue" : dueSoon ? " — due soon" : ""}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {showAdd && <VaccinationModal setData={setData} animal={animal} onClose={() => setShowAdd(false)} notify={notify} />}
+    </Card>
+  );
+}
+
+function VaccinationModal({ setData, animal, onClose, notify }) {
+  const [f, setF] = useState({ vaccine: "", doctor: "", nextDueDate: "", notes: "" });
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!f.vaccine) return;
+    setSaving(true);
+    try {
+      const row = await dbInsert("vaccinations", { animalId: animal.id, vaccine: f.vaccine, date: today(), doctor: f.doctor, nextDueDate: f.nextDueDate || null, notes: f.notes });
+      setData((d) => ({ ...d, vaccinations: [...d.vaccinations, row] }));
+      onClose();
+    } catch (e) { notify("Could not save vaccination"); } finally { setSaving(false); }
+  };
+  return (
+    <Sheet title="Add Vaccination" onClose={onClose} footer={<Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Vaccination"}</Btn>}>
+      <Field label="Vaccine Name"><input className={inputCls} style={inputStyle} value={f.vaccine} onChange={(e) => setF({ ...f, vaccine: e.target.value })} placeholder="e.g. FMD" /></Field>
+      <Field label="Doctor"><input className={inputCls} style={inputStyle} value={f.doctor} onChange={(e) => setF({ ...f, doctor: e.target.value })} /></Field>
+      <Field label="Next Due Date"><input type="date" className={inputCls} style={inputStyle} value={f.nextDueDate} onChange={(e) => setF({ ...f, nextDueDate: e.target.value })} /></Field>
+      <Field label="Notes"><input className={inputCls} style={inputStyle} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field>
+    </Sheet>
+  );
+}
+
+function AnimalBreedingSection({ data, setData, animal, notify }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const records = data.breeding.filter((b) => b.animalId === animal.id).sort((a, b) => (b.matingDate || "").localeCompare(a.matingDate || ""));
+
+  const remove = async (id) => {
+    try { await dbDelete("breeding", id); setData((d) => ({ ...d, breeding: d.breeding.filter((b) => b.id !== id) })); }
+    catch (e) { notify("Could not delete record"); }
+  };
+
+  return (
+    <Card className="mb-4">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold" style={{ color: C.gray }}>BREEDING</p>
+        <button onClick={() => setShowAdd(true)} className="p-1.5 rounded-full" style={{ background: C.greenPale }}><Plus size={14} color={C.green} /></button>
+      </div>
+      {records.length === 0 ? (
+        <p className="text-xs" style={{ color: C.grayLight }}>No breeding records yet.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {records.map((b) => (
+            <div key={b.id} className="rounded-xl p-2.5" style={{ background: C.creamDark }}>
+              <div className="flex items-center justify-between mb-1">
+                <Badge tone={b.pregnancyStatus === "Confirmed" ? "green" : b.pregnancyStatus === "Delivered" ? "gray" : "warn"}>{b.pregnancyStatus}</Badge>
+                <RowActions onDelete={() => remove(b.id)} />
+              </div>
+              <p className="text-[11px]" style={{ color: C.gray }}>
+                {b.matingDate && `Mated: ${fmtDate(b.matingDate)}`}{b.method ? ` (${b.method})` : ""}
+              </p>
+              {b.expectedDelivery && <p className="text-[10px] mt-1" style={{ color: C.warn }}>Expected delivery: {fmtDate(b.expectedDelivery)}</p>}
+              {b.actualDelivery && <p className="text-[10px] mt-1" style={{ color: C.green }}>Delivered: {fmtDate(b.actualDelivery)}{b.calfDetails ? ` — ${b.calfDetails}` : ""}</p>}
+            </div>
+          ))}
+        </div>
+      )}
+      {showAdd && <BreedingModal setData={setData} animal={animal} onClose={() => setShowAdd(false)} notify={notify} />}
+    </Card>
+  );
+}
+
+function BreedingModal({ setData, animal, onClose, notify }) {
+  const [f, setF] = useState({ heatDate: "", matingDate: "", method: "Natural", pregnancyStatus: "Pending", expectedDelivery: "", notes: "" });
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    setSaving(true);
+    try {
+      const row = await dbInsert("breeding", { animalId: animal.id, heatDate: f.heatDate || null, matingDate: f.matingDate || null, method: f.method, pregnancyStatus: f.pregnancyStatus, expectedDelivery: f.expectedDelivery || null, notes: f.notes });
+      setData((d) => ({ ...d, breeding: [...d.breeding, row] }));
+      onClose();
+    } catch (e) { notify("Could not save record"); } finally { setSaving(false); }
+  };
+  return (
+    <Sheet title="Add Breeding Record" onClose={onClose} footer={<Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Record"}</Btn>}>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Heat Date"><input type="date" className={inputCls} style={inputStyle} value={f.heatDate} onChange={(e) => setF({ ...f, heatDate: e.target.value })} /></Field>
+        <Field label="Mating Date"><input type="date" className={inputCls} style={inputStyle} value={f.matingDate} onChange={(e) => setF({ ...f, matingDate: e.target.value })} /></Field>
+      </div>
+      <Field label="Method">
+        <select className={inputCls} style={inputStyle} value={f.method} onChange={(e) => setF({ ...f, method: e.target.value })}>
+          <option>Natural</option><option>Artificial Insemination</option>
+        </select>
+      </Field>
+      <Field label="Pregnancy Status">
+        <select className={inputCls} style={inputStyle} value={f.pregnancyStatus} onChange={(e) => setF({ ...f, pregnancyStatus: e.target.value })}>
+          <option>Pending</option><option>Confirmed</option><option>Not Pregnant</option><option>Delivered</option>
+        </select>
+      </Field>
+      <Field label="Expected Delivery"><input type="date" className={inputCls} style={inputStyle} value={f.expectedDelivery} onChange={(e) => setF({ ...f, expectedDelivery: e.target.value })} /></Field>
+      <Field label="Notes"><input className={inputCls} style={inputStyle} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field>
+    </Sheet>
   );
 }
 
