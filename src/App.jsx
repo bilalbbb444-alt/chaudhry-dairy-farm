@@ -1421,7 +1421,7 @@ function CustomerProfile({ data, setData, custId, onBack, notify }) {
 
       {showSale && <SaleModal data={data} setData={setData} onClose={() => setShowSale(false)} notify={notify} presetCustomerId={c.id} />}
       {showPay && <QuickPaymentModal data={data} setData={setData} customerId={c.id} onClose={() => setShowPay(false)} notify={notify} />}
-      {showBill && <BillSheet data={data} customer={c} monthMilk={monthMilk} monthBill={monthBill} monthPaid={monthPaid} onClose={() => setShowBill(false)} />}
+      {showBill && <BillSheet data={data} customer={c} monthMilk={monthMilk} monthBill={monthBill} monthPaid={monthPaid} allSales={data.sales.filter((s) => s.customerId === c.id)} allPayments={data.custPayments.filter((p) => p.customerId === c.id)} onClose={() => setShowBill(false)} />}
       {showEdit && <CustomerModal setData={setData} customer={c} onClose={() => setShowEdit(false)} notify={notify} />}
     </Screen>
   );
@@ -1517,23 +1517,49 @@ function PaymentModal({ data, setData, onClose, notify }) {
   );
 }
 
-function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, onClose }) {
+function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, allPayments, onClose }) {
   const remaining = monthBill - monthPaid;
   const monthName = new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" });
-  const message = `Dear ${customer.name}, your ${monthName} milk bill from ${data.settings.farmName} is ${fmt(monthBill)}. You have paid ${fmt(monthPaid)}. Remaining balance is ${fmt(remaining)}.`;
+  const message = `Dear ${customer.name}, your ${monthName} milk bill from ${data.settings.farmName} is ${fmt(monthBill)}. You have paid ${fmt(monthPaid)}. Total credit remaining is ${fmt(customer.balance)}.`;
+  const [busy, setBusy] = useState(false);
 
-  const share = async () => {
-    if (navigator.share) {
-      try { await navigator.share({ title: "Milk Bill", text: message }); return; } catch (e) {}
-    }
-    try { await navigator.clipboard.writeText(message); } catch (e) {}
+  const buildPdf = async () => {
+    const { buildCustomerStatementPdf } = await import("./pdf.js");
+    return buildCustomerStatementPdf(data.settings, customer, allSales, allPayments);
+  };
+
+  const downloadPdf = async () => {
+    setBusy(true);
+    try {
+      const doc = await buildPdf();
+      doc.save(`${customer.name.replace(/\s+/g, "-")}-statement.pdf`);
+    } finally { setBusy(false); }
+  };
+
+  const shareWhatsApp = async () => {
+    setBusy(true);
+    try {
+      const doc = await buildPdf();
+      const blob = doc.output("blob");
+      const file = new File([blob], `${customer.name.replace(/\s+/g, "-")}-statement.pdf`, { type: "application/pdf" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Milk Bill", text: message });
+      } else {
+        doc.save(`${customer.name.replace(/\s+/g, "-")}-statement.pdf`);
+        const phone = (customer.phone || "").replace(/\D/g, "");
+        const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message + " (PDF statement downloaded — attach it here.)")}`;
+        window.open(waUrl, "_blank");
+      }
+    } catch (e) {
+      // user cancelled share sheet — no-op
+    } finally { setBusy(false); }
   };
 
   return (
-    <Sheet title="Monthly Bill" onClose={onClose} footer={
+    <Sheet title="Customer Statement" onClose={onClose} footer={
       <div className="flex gap-2">
-        <Btn variant="outline" full onClick={() => window.print()}><Printer size={15} /> Print</Btn>
-        <Btn full onClick={share}><Share2 size={15} /> Share</Btn>
+        <Btn variant="outline" full onClick={downloadPdf} disabled={busy}><Download size={15} /> Download PDF</Btn>
+        <Btn full onClick={shareWhatsApp} disabled={busy}><Share2 size={15} /> Share on WhatsApp</Btn>
       </div>
     }>
       <div className="rounded-2xl p-4 mb-3" style={{ border: `1.5px dashed ${C.line}` }}>
@@ -1546,16 +1572,15 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, onClose })
         </div>
         <Row label="Customer" value={customer.name} />
         <Row label="Phone" value={customer.phone} />
-        <Row label="Billing Month" value={monthName} />
-        <Row label="Total Liters" value={fmtL(monthMilk)} />
-        <Row label="Price / L" value={fmt(customer.defaultPrice)} />
-        <Row label="Total Amount" value={fmt(monthBill)} bold />
-        <Row label="Amount Paid" value={fmt(monthPaid)} />
-        <Row label="Remaining Balance" value={fmt(remaining)} bold tone={remaining > 0 ? "warn" : "green"} />
+        <Row label="This Month's Milk" value={fmtL(monthMilk)} />
+        <Row label="This Month's Bill" value={fmt(monthBill)} />
+        <Row label="This Month's Paid" value={fmt(monthPaid)} />
+        <Row label="Total Credit Remaining" value={fmt(customer.balance)} bold tone={customer.balance > 0 ? "warn" : "green"} />
         <div className="mt-2">
-          <Badge tone={remaining > 0 ? "warn" : "green"}>{remaining > 0 ? "Unpaid" : "Paid"}</Badge>
+          <Badge tone={customer.balance > 0 ? "warn" : "green"}>{customer.balance > 0 ? "Credit Due" : "Settled"}</Badge>
         </div>
       </div>
+      <p className="text-[11px] mb-2" style={{ color: C.gray }}>The PDF includes the complete transaction history — every sale and payment with a running balance, not just this month.</p>
       <p className="text-xs italic" style={{ color: C.gray }}>{message}</p>
     </Sheet>
   );
@@ -2212,37 +2237,22 @@ function ReportsScreen({ data, setData, onBack, notify }) {
     }
   };
 
-  const downloadReport = () => {
-    const heading = mode === "day" ? `Date: ${fmtDate(date)}` : `Period: ${fmtDate(from)} to ${fmtDate(to)}`;
-    const lines = [
-      data.settings.farmName.toUpperCase(),
-      "Dairy Farm Management System",
-      "",
-      heading,
-      "",
-      `Milk Produced: ${fmtL(t.milkProduced)}`,
-      `Milk Sold: ${fmtL(t.milkSold)}`,
-      mode === "day" ? `Milk Remaining: ${fmtL(t.milkProduced - t.milkSold)}` : null,
-      `Milk Revenue: ${fmt(t.salesTotal)}`,
-      `Expenses: ${fmt(t.dayExpenses)}`,
-      `Customer Payments: ${fmt(t.paymentsReceived)}`,
-      `Supplier Payments: ${fmt(t.paymentsMade)}`,
-      `Net Profit: ${fmt(t.profit)}`,
-      "",
-      `Generated: ${new Date().toLocaleString("en-GB")}`,
-    ].filter(Boolean);
-    const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = mode === "day"
-      ? `${data.settings.farmName.replace(/\s+/g, "-")}-report-${date}.txt`
-      : `${data.settings.farmName.replace(/\s+/g, "-")}-report-${from}-to-${to}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    notify("Report downloaded");
+  const [downloading, setDownloading] = useState(false);
+  const downloadReport = async () => {
+    setDownloading(true);
+    try {
+      const { buildProfitLossPdf } = await import("./pdf.js");
+      const doc = await buildProfitLossPdf(data.settings, { mode, date, from, to, totals: t });
+      const filename = mode === "day"
+        ? `${data.settings.farmName.replace(/\s+/g, "-")}-PL-report-${date}.pdf`
+        : `${data.settings.farmName.replace(/\s+/g, "-")}-PL-report-${from}-to-${to}.pdf`;
+      doc.save(filename);
+      notify("Report downloaded");
+    } catch (e) {
+      notify("Could not generate report");
+    } finally {
+      setDownloading(false);
+    }
   };
 
   return (
@@ -2288,7 +2298,7 @@ function ReportsScreen({ data, setData, onBack, notify }) {
         <Row label="Net Profit" value={fmt(t.profit)} bold tone={t.profit >= 0 ? "green" : "warn"} />
       </Card>
 
-      <Btn full variant="outline" onClick={downloadReport} className="mb-4" disabled={mode === "range" && !rangeValid}><Download size={16} /> Download Report</Btn>
+      <Btn full variant="outline" onClick={downloadReport} className="mb-4" disabled={(mode === "range" && !rangeValid) || downloading}><Download size={16} /> {downloading ? "Generating PDF…" : "Download Profit & Loss PDF"}</Btn>
 
       <Card className="mb-4">
         <p className="text-xs font-semibold mb-3" style={{ color: C.gray }}>MILK PRODUCTION &middot; {mode === "day" ? "LAST 7 DAYS" : "SELECTED RANGE"}</p>
