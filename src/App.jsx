@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "./supabaseClient.js";
+import * as offline from "./offline.js";
 import {
   Home, Droplet, ShoppingCart, Users, MoreHorizontal, Plus, AlertTriangle,
   ChevronRight, ChevronLeft, X, Check, TrendingUp, Package, Wallet, FileText,
   Settings as SettingsIcon, Bell, Search, ArrowLeft, Phone, MapPin, Calendar,
   Banknote, Truck, PawPrint, Printer, Share2, UserCog, Stethoscope, Pencil, Trash2,
-  Download, Lock, Mail, Delete
+  Download, Lock, Mail, Delete, WifiOff, RefreshCw
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis,
@@ -92,28 +93,116 @@ const TABLES = {
 // through props everywhere — there is exactly one active farm per session.
 let CURRENT_FARM_ID = null;
 
+function isNetworkFailure(e) {
+  return !navigator.onLine || e instanceof TypeError || e?.name === "TimeoutError" || /fetch|network|timeout/i.test(e?.message || "");
+}
+
+// Wraps a Supabase call so a "connected to wifi but no real internet" situation
+// (common with patchy rural connections) fails fast into the offline path
+// instead of hanging the UI for a long browser-default timeout.
+function withTimeout(promise, ms = 8000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error("timeout"), { name: "TimeoutError" })), ms)),
+  ]);
+}
+
 async function dbInsert(key, payload) {
-  const { data, error } = await supabase
-    .from(TABLES[key])
-    .insert({ ...payloadToSnake(payload), farm_id: CURRENT_FARM_ID })
-    .select()
-    .single();
-  if (error) throw error;
-  return rowToCamel(data);
+  if (!navigator.onLine) {
+    const tempId = offline.localTempId();
+    const row = { id: tempId, ...payload };
+    offline.pushToQueue(CURRENT_FARM_ID, { type: "insert", key, tempId, payload });
+    return row;
+  }
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from(TABLES[key]).insert({ ...payloadToSnake(payload), farm_id: CURRENT_FARM_ID }).select().single()
+    );
+    if (error) throw error;
+    return rowToCamel(data);
+  } catch (e) {
+    if (!isNetworkFailure(e)) throw e;
+    const tempId = offline.localTempId();
+    const row = { id: tempId, ...payload };
+    offline.pushToQueue(CURRENT_FARM_ID, { type: "insert", key, tempId, payload });
+    return row;
+  }
 }
-async function dbUpdate(key, id, payload) {
-  const { data, error } = await supabase
-    .from(TABLES[key])
-    .update(payloadToSnake(payload))
-    .eq("id", id)
-    .select()
-    .single();
-  if (error) throw error;
-  return rowToCamel(data);
+
+async function dbUpdate(key, id, payload, baseRow) {
+  if (!navigator.onLine) {
+    offline.pushToQueue(CURRENT_FARM_ID, { type: "update", key, id, payload });
+    return { ...(baseRow || { id }), ...payload };
+  }
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from(TABLES[key]).update(payloadToSnake(payload)).eq("id", id).select().single()
+    );
+    if (error) throw error;
+    return rowToCamel(data);
+  } catch (e) {
+    if (!isNetworkFailure(e)) throw e;
+    offline.pushToQueue(CURRENT_FARM_ID, { type: "update", key, id, payload });
+    return { ...(baseRow || { id }), ...payload };
+  }
 }
+
 async function dbDelete(key, id) {
-  const { error } = await supabase.from(TABLES[key]).delete().eq("id", id);
-  if (error) throw error;
+  if (!navigator.onLine) {
+    if (!offline.isTempId(id)) offline.pushToQueue(CURRENT_FARM_ID, { type: "delete", key, id });
+    return;
+  }
+  try {
+    const { error } = await withTimeout(supabase.from(TABLES[key]).delete().eq("id", id));
+    if (error) throw error;
+  } catch (e) {
+    if (!isNetworkFailure(e)) throw e;
+    if (!offline.isTempId(id)) offline.pushToQueue(CURRENT_FARM_ID, { type: "delete", key, id });
+  }
+}
+
+// Replays queued offline operations against Supabase in order, remapping
+// any references to records that were themselves created offline.
+async function flushOfflineQueue(farmId) {
+  const queue = offline.getQueue(farmId);
+  if (queue.length === 0) return { synced: 0, remaining: 0 };
+  const idMap = {};
+  let synced = 0;
+  const remaining = [];
+
+  for (const op of queue) {
+    try {
+      if (op.type === "insert") {
+        const payload = offline.remapReferences(op.payload, idMap);
+        const { data, error } = await supabase
+          .from(TABLES[op.key])
+          .insert({ ...payloadToSnake(payload), farm_id: farmId })
+          .select()
+          .single();
+        if (error) throw error;
+        idMap[op.tempId] = data.id;
+        synced++;
+      } else if (op.type === "update") {
+        const realId = idMap[op.id] || op.id;
+        if (offline.isTempId(realId)) { remaining.push(op); continue; } // its insert hasn't synced yet
+        const payload = offline.remapReferences(op.payload, idMap);
+        const { error } = await supabase.from(TABLES[op.key]).update(payloadToSnake(payload)).eq("id", realId);
+        if (error) throw error;
+        synced++;
+      } else if (op.type === "delete") {
+        const realId = idMap[op.id] || op.id;
+        if (offline.isTempId(realId)) { synced++; continue; } // created and deleted offline — nothing to sync
+        const { error } = await supabase.from(TABLES[op.key]).delete().eq("id", realId);
+        if (error) throw error;
+        synced++;
+      }
+    } catch (e) {
+      remaining.push(op);
+    }
+  }
+
+  offline.saveQueue(farmId, remaining);
+  return { synced, remaining: remaining.length };
 }
 
 function farmRowToSettings(farm) {
@@ -678,6 +767,50 @@ export default function ChaudhryDairyFarm() {
     return () => window.removeEventListener("beforeinstallprompt", handler);
   }, []);
 
+  // ---- Online/offline tracking ----
+  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+
+  useEffect(() => {
+    const goOnline = () => setIsOnline(true);
+    const goOffline = () => setIsOnline(false);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+  }, []);
+
+  const refreshPendingCount = (farmId) => {
+    if (!farmId) return;
+    setPendingCount(offline.getQueue(farmId).length);
+  };
+
+  const syncNow = async (farmId) => {
+    if (!farmId || !navigator.onLine) return;
+    setSyncing(true);
+    try {
+      const { synced } = await flushOfflineQueue(farmId);
+      if (synced > 0) {
+        const fresh = await fetchFarmData(farmId);
+        setData(fresh);
+        offline.saveSnapshot(farmId, fresh);
+        setToast(`Synced ${synced} offline change${synced === 1 ? "" : "s"}`);
+      }
+    } catch (e) {
+      // will retry next time we come online
+    } finally {
+      refreshPendingCount(farmId);
+      setSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isOnline && membership?.farmId) syncNow(membership.farmId);
+  }, [isOnline, membership?.farmId]);
+
   // ---- Auth session ----
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -695,34 +828,57 @@ export default function ChaudhryDairyFarm() {
     return () => sub.subscription.unsubscribe();
   }, []);
 
-  // ---- Farm membership lookup once signed in ----
+  // ---- Farm membership lookup once signed in (falls back to cache when offline) ----
   useEffect(() => {
     if (!session) return;
     (async () => {
       setMembershipLoading(true);
-      const { data: rows } = await supabase
-        .from("farm_members")
-        .select("farm_id, role")
-        .eq("user_id", session.user.id)
-        .limit(1);
-      if (rows && rows[0]) {
-        CURRENT_FARM_ID = rows[0].farm_id;
-        setMembership({ farmId: rows[0].farm_id, role: rows[0].role });
-        setRole(rows[0].role);
+      try {
+        const { data: rows, error } = await supabase
+          .from("farm_members")
+          .select("farm_id, role")
+          .eq("user_id", session.user.id)
+          .limit(1);
+        if (error) throw error;
+        if (rows && rows[0]) {
+          CURRENT_FARM_ID = rows[0].farm_id;
+          const m = { farmId: rows[0].farm_id, role: rows[0].role };
+          setMembership(m);
+          setRole(m.role);
+          try { localStorage.setItem("cdf-last-membership", JSON.stringify(m)); } catch (e) {}
+        }
+      } catch (e) {
+        // offline on a fresh load — fall back to the last membership we saw
+        try {
+          const cached = JSON.parse(localStorage.getItem("cdf-last-membership") || "null");
+          if (cached) {
+            CURRENT_FARM_ID = cached.farmId;
+            setMembership(cached);
+            setRole(cached.role);
+          }
+        } catch (e2) {}
       }
       setMembershipLoading(false);
     })();
   }, [session]);
 
-  // ---- Load farm data once membership is known ----
+  // ---- Load farm data once membership is known (falls back to cached snapshot when offline) ----
   useEffect(() => {
     if (!membership) return;
     (async () => {
+      refreshPendingCount(membership.farmId);
       try {
         const farmData = await fetchFarmData(membership.farmId);
         setData(farmData);
+        offline.saveSnapshot(membership.farmId, farmData);
       } catch (e) {
-        setToast("Could not load farm data. Please refresh.");
+        const cached = offline.loadSnapshot(membership.farmId);
+        if (cached) {
+          setData(cached.data);
+          setToast("You're offline — showing your last saved data");
+        } else {
+          setToast("No internet connection. Connect once to load your farm.");
+        }
       }
     })();
   }, [membership]);
@@ -735,10 +891,18 @@ export default function ChaudhryDairyFarm() {
 
   const notify = (msg) => setToast(msg);
 
+  // Keep the offline cache warm as data changes, and keep the pending-count badge accurate.
+  useEffect(() => {
+    if (!data || !membership?.farmId) return;
+    offline.saveSnapshot(membership.farmId, data);
+    refreshPendingCount(membership.farmId);
+  }, [data]);
+
   const refreshFarm = async () => {
     if (!membership) return;
     const farmData = await fetchFarmData(membership.farmId);
     setData(farmData);
+    offline.saveSnapshot(membership.farmId, farmData);
   };
 
   if (authLoading) {
@@ -857,6 +1021,25 @@ export default function ChaudhryDairyFarm() {
               <Check size={11} strokeWidth={3} />
             </div>
             {toast}
+          </div>
+        </div>
+      )}
+
+      {(!isOnline || pendingCount > 0) && (
+        <div className="fixed left-0 right-0 z-30 flex justify-center px-4" style={{ bottom: 74 }}>
+          <div
+            className="flex items-center gap-2 px-3.5 py-2 rounded-full text-xs font-semibold text-white max-w-md w-full justify-center animate-toast-in"
+            style={{ background: isOnline ? C.gold : C.greenDark, boxShadow: "0 4px 14px rgba(18,48,24,0.3)" }}
+          >
+            {isOnline ? (
+              syncing ? (
+                <><RefreshCw size={13} className="animate-spin" /> Syncing {pendingCount} change{pendingCount === 1 ? "" : "s"}…</>
+              ) : (
+                <><RefreshCw size={13} /> {pendingCount} change{pendingCount === 1 ? "" : "s"} waiting to sync</>
+              )
+            ) : (
+              <><WifiOff size={13} /> Offline{pendingCount > 0 ? ` — ${pendingCount} change${pendingCount === 1 ? "" : "s"} saved, will sync` : " — showing saved data"}</>
+            )}
           </div>
         </div>
       )}
@@ -1077,28 +1260,52 @@ function MilkScreen({ data, update, notify }) {
 
   const [saving, setSaving] = useState(false);
   const save = async () => {
-    const rows = milkingAnimals
-      .filter((a) => entries[a.id] !== undefined && entries[a.id] !== "")
-      .map((a) => ({ animal_id: a.id, date, session, quantity: parseFloat(entries[a.id]) || 0, farm_id: CURRENT_FARM_ID }));
-    if (rows.length === 0) return;
+    const entered = milkingAnimals.filter((a) => entries[a.id] !== undefined && entries[a.id] !== "");
+    if (entered.length === 0) return;
     setSaving(true);
-    const { data: rowsBack, error } = await supabase
-      .from("milk_production")
-      .upsert(rows, { onConflict: "animal_id,date,session" })
-      .select();
-    setSaving(false);
-    if (error) { notify("Could not save milk entries"); return; }
-    const camelRows = rowsBack.map(rowToCamel);
-    update("milk", (milk) => {
-      let next = [...milk];
-      camelRows.forEach((r) => {
-        const idx = next.findIndex((m) => m.id === r.id);
-        if (idx >= 0) next[idx] = r; else next.push(r);
-      });
-      return next;
-    });
+
+    if (navigator.onLine) {
+      const rows = entered.map((a) => ({ animal_id: a.id, date, session, quantity: parseFloat(entries[a.id]) || 0, farm_id: CURRENT_FARM_ID }));
+      try {
+        const { data: rowsBack, error } = await supabase
+          .from("milk_production")
+          .upsert(rows, { onConflict: "animal_id,date,session" })
+          .select();
+        if (error) throw error;
+        const camelRows = rowsBack.map(rowToCamel);
+        update("milk", (milk) => {
+          let next = [...milk];
+          camelRows.forEach((r) => {
+            const idx = next.findIndex((m) => m.id === r.id);
+            if (idx >= 0) next[idx] = r; else next.push(r);
+          });
+          return next;
+        });
+        setEntries({});
+        notify("Milk production saved");
+        setSaving(false);
+        return;
+      } catch (e) {
+        // fall through to offline-safe per-row path below
+      }
+    }
+
+    // Offline (or the network attempt above failed): save each row through the
+    // offline-aware helpers so they queue and sync automatically later.
+    for (const a of entered) {
+      const qty = parseFloat(entries[a.id]) || 0;
+      const existing = data.milk.find((m) => m.animalId === a.id && m.date === date && m.session === session);
+      if (existing) {
+        const row = await dbUpdate("milk", existing.id, { quantity: qty }, existing);
+        update("milk", (milk) => milk.map((m) => m.id === existing.id ? row : m));
+      } else {
+        const row = await dbInsert("milk", { animalId: a.id, date, session, quantity: qty, notes: "" });
+        update("milk", (milk) => [...milk, row]);
+      }
+    }
     setEntries({});
-    notify("Milk production saved");
+    notify(navigator.onLine ? "Milk production saved" : "Saved offline — will sync when back online");
+    setSaving(false);
   };
 
   const recent = [...data.milk].sort((a, b) => (b.date + b.session).localeCompare(a.date + a.session)).slice(0, 25);
@@ -1180,20 +1387,42 @@ function QuickMilkModal({ data, update, onClose, notify }) {
   const save = async () => {
     if (!animalId || !qty) return;
     setSaving(true);
-    const { data: row, error } = await supabase
-      .from("milk_production")
-      .upsert([{ animal_id: animalId, date: today(), session, quantity: parseFloat(qty) || 0, farm_id: CURRENT_FARM_ID }], { onConflict: "animal_id,date,session" })
-      .select()
-      .single();
+    const q = parseFloat(qty) || 0;
+    const dateStr = today();
+
+    if (navigator.onLine) {
+      try {
+        const { data: row, error } = await supabase
+          .from("milk_production")
+          .upsert([{ animal_id: animalId, date: dateStr, session, quantity: q, farm_id: CURRENT_FARM_ID }], { onConflict: "animal_id,date,session" })
+          .select()
+          .single();
+        if (error) throw error;
+        const r = rowToCamel(row);
+        update("milk", (milk) => {
+          const idx = milk.findIndex((m) => m.id === r.id);
+          if (idx >= 0) { const n = [...milk]; n[idx] = r; return n; }
+          return [...milk, r];
+        });
+        notify("Milk entry added");
+        setSaving(false);
+        onClose();
+        return;
+      } catch (e) {
+        // fall through to offline path
+      }
+    }
+
+    const existing = data.milk.find((m) => m.animalId === animalId && m.date === dateStr && m.session === session);
+    if (existing) {
+      const row = await dbUpdate("milk", existing.id, { quantity: q }, existing);
+      update("milk", (milk) => milk.map((m) => m.id === existing.id ? row : m));
+    } else {
+      const row = await dbInsert("milk", { animalId, date: dateStr, session, quantity: q, notes: "" });
+      update("milk", (milk) => [...milk, row]);
+    }
+    notify(navigator.onLine ? "Milk entry added" : "Saved offline — will sync when back online");
     setSaving(false);
-    if (error) { notify("Could not save entry"); return; }
-    const r = rowToCamel(row);
-    update("milk", (milk) => {
-      const idx = milk.findIndex((m) => m.id === r.id);
-      if (idx >= 0) { const n = [...milk]; n[idx] = r; return n; }
-      return [...milk, r];
-    });
-    notify("Milk entry added");
     onClose();
   };
 
@@ -1229,7 +1458,7 @@ function SalesScreen({ data, setData, notify, setModal }) {
       await dbDelete("sales", sale.id);
       if (sale.paymentStatus === "Unpaid") {
         const c = data.customers.find((x) => x.id === sale.customerId);
-        if (c) await dbUpdate("customers", c.id, { balance: c.balance - sale.total });
+        if (c) await dbUpdate("customers", c.id, { balance: c.balance - sale.total }, c);
       }
     } catch (e) { notify("Could not delete sale"); return; }
     setData((d) => ({
@@ -1300,7 +1529,7 @@ function SaleModal({ data, setData, onClose, notify, presetCustomerId }) {
       let updatedCustomer = null;
       if (status === "Unpaid") {
         const c = data.customers.find((x) => x.id === customerId);
-        updatedCustomer = await dbUpdate("customers", customerId, { balance: c.balance + total });
+        updatedCustomer = await dbUpdate("customers", customerId, { balance: c.balance + total }, c);
       }
       setData((d) => ({
         ...d,
@@ -1413,7 +1642,7 @@ function CustomerModal({ setData, onClose, customer, notify }) {
     };
     try {
       if (isEdit) {
-        const row = await dbUpdate("customers", customer.id, payload);
+        const row = await dbUpdate("customers", customer.id, payload, customer);
         setData((d) => ({ ...d, customers: d.customers.map((c) => c.id === customer.id ? row : c) }));
       } else {
         const row = await dbInsert("customers", { ...payload, status: "Active", balance: 0 });
@@ -1555,7 +1784,7 @@ function QuickPaymentModal({ data, setData, customerId, onClose, notify }) {
     try {
       const payment = await dbInsert("custPayments", { customerId, amount: amt, date: today(), method, reference: "", notes: "" });
       const c = data.customers.find((x) => x.id === customerId);
-      const updatedCustomer = await dbUpdate("customers", customerId, { balance: c.balance - amt });
+      const updatedCustomer = await dbUpdate("customers", customerId, { balance: c.balance - amt }, c);
       setData((d) => ({
         ...d,
         custPayments: [...d.custPayments, payment],
@@ -1593,7 +1822,7 @@ function PaymentModal({ data, setData, onClose, notify }) {
     try {
       const payment = await dbInsert("custPayments", { customerId, amount: amt, date: today(), method, reference: "", notes: "" });
       const c = data.customers.find((x) => x.id === customerId);
-      const updatedCustomer = await dbUpdate("customers", customerId, { balance: c.balance - amt });
+      const updatedCustomer = await dbUpdate("customers", customerId, { balance: c.balance - amt }, c);
       setData((d) => ({
         ...d,
         custPayments: [...d.custPayments, payment],
@@ -1781,7 +2010,7 @@ function AnimalModal({ setData, onClose, animal, notify }) {
     setSaving(true);
     try {
       if (isEdit) {
-        const row = await dbUpdate("animals", animal.id, { ...f, purchasePrice: parseFloat(f.purchasePrice) || 0 });
+        const row = await dbUpdate("animals", animal.id, { ...f, purchasePrice: parseFloat(f.purchasePrice) || 0 }, animal);
         setData((d) => ({ ...d, animals: d.animals.map((a) => a.id === animal.id ? row : a) }));
       } else {
         const row = await dbInsert("animals", { ...f, purchasePrice: parseFloat(f.purchasePrice) || 0, purchaseDate: today(), notes: "" });
@@ -2147,7 +2376,7 @@ function InventoryModal({ setData, onClose, notify, item }) {
     setSaving(true);
     try {
       if (isEdit) {
-        const row = await dbUpdate("inventory", item.id, payload);
+        const row = await dbUpdate("inventory", item.id, payload, item);
         setData((d) => ({ ...d, inventory: d.inventory.map((i) => i.id === item.id ? row : i) }));
         notify("Item updated");
       } else {
@@ -2199,7 +2428,7 @@ function PurchasesScreen({ data, setData, onBack, notify }) {
       await dbDelete("purchases", p.id);
       const item = data.inventory.find((i) => i.name === p.product);
       let updatedItem = null;
-      if (item) updatedItem = await dbUpdate("inventory", item.id, { currentStock: Math.max(0, item.currentStock - p.quantity) });
+      if (item) updatedItem = await dbUpdate("inventory", item.id, { currentStock: Math.max(0, item.currentStock - p.quantity) }, item);
       setData((d) => ({
         ...d,
         purchases: d.purchases.filter((x) => x.id !== p.id),
@@ -2271,7 +2500,7 @@ function PurchaseModal({ data, setData, onClose, notify }) {
         newInventoryItem = await dbInsert("inventory", { name: f.newName, category: f.newCategory, unit: f.newUnit, currentStock: qty, minimumStock: 0, avgCost: price });
         productName = newInventoryItem.name; productUnit = newInventoryItem.unit;
       } else {
-        updatedInventoryItem = await dbUpdate("inventory", existingProduct.id, { currentStock: existingProduct.currentStock + qty });
+        updatedInventoryItem = await dbUpdate("inventory", existingProduct.id, { currentStock: existingProduct.currentStock + qty }, existingProduct);
         productName = existingProduct.name; productUnit = existingProduct.unit;
       }
       const purchase = await dbInsert("purchases", { supplier: f.supplier, date: today(), product: productName, quantity: qty, unit: productUnit, unitPrice: price, total, paid, credit, status });
@@ -2469,7 +2698,7 @@ function EmployeeModal({ setData, onClose, notify, employee }) {
     setSaving(true);
     try {
       if (isEdit) {
-        const row = await dbUpdate("employees", employee.id, { name: f.name, phone: f.phone, role: f.role, salary: parseFloat(f.salary) });
+        const row = await dbUpdate("employees", employee.id, { name: f.name, phone: f.phone, role: f.role, salary: parseFloat(f.salary) }, employee);
         setData((d) => ({ ...d, employees: d.employees.map((e) => e.id === employee.id ? row : e) }));
         notify("Employee updated");
       } else {
@@ -2686,8 +2915,10 @@ function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail, ins
     }
   };
 
-  // Debounced sync of settings -> farms table
+  // Debounced sync of settings -> farms table (skipped while offline; PIN/app-lock still
+  // applies locally immediately since it's read straight from local `data.settings`)
   useEffect(() => {
+    if (!navigator.onLine) return;
     const t = setTimeout(() => {
       supabase.from("farms").update({
         name: s.farmName,
@@ -2703,7 +2934,7 @@ function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail, ins
         app_lock_enabled: s.appLock.enabled,
         app_lock_pin: s.appLock.pin,
         notifications: s.notifications,
-      }).eq("id", CURRENT_FARM_ID).then(({ error }) => { if (error) console.error(error); });
+      }).eq("id", CURRENT_FARM_ID).then(({ error }) => { if (error) console.error(error); }).catch(() => {});
     }, 500);
     return () => clearTimeout(t);
   }, [JSON.stringify(s)]);
