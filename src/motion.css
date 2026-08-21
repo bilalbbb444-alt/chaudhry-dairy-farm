@@ -1,0 +1,100 @@
+/* ------------------------------------------------------------------ */
+/*  Chaudhry Dairy Farm — motion system                                */
+/*  A restrained set of animations used consistently across the app:   */
+/*  screens fade+rise on enter, sheets slide up with a real spring     */
+/*  feel, lists stagger in, and loading states use one signature       */
+/*  motif (a milk drop filling a glass) instead of bare "Loading…"     */
+/*  text. Everything respects prefers-reduced-motion.                  */
+/* ------------------------------------------------------------------ */
+
+@keyframes screenIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes rowIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sheetBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes sheetUp {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes toastIn {
+  from { opacity: 0; transform: translate(-50%, -10px) scale(0.96); }
+  to { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+@keyframes dropFall {
+  0% { transform: translateY(-6px); opacity: 0; }
+  30% { opacity: 1; }
+  55% { transform: translateY(10px); opacity: 1; }
+  62% { transform: translateY(11px) scaleX(1.25) scaleY(0.8); opacity: 0; }
+  63%, 100% { opacity: 0; }
+}
+@keyframes glassFill {
+  0%, 55% { transform: scaleY(0); }
+  100% { transform: scaleY(1); }
+}
+@keyframes ripple {
+  0% { transform: scale(0.4) translateY(11px); opacity: 0.5; }
+  100% { transform: scale(1.6) translateY(11px); opacity: 0; }
+}
+
+.animate-screen-in {
+  animation: screenIn 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-row-in {
+  animation: rowIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-backdrop-in {
+  animation: sheetBackdropIn 0.2s ease-out both;
+}
+.animate-sheet-up {
+  animation: sheetUp 0.32s cubic-bezier(0.19, 1.24, 0.4, 1) both;
+}
+.animate-toast-in {
+  animation: toastIn 0.28s cubic-bezier(0.19, 1.24, 0.4, 1) both;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #ECE2C6 25%, #F6F1E2 37%, #ECE2C6 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+.tap {
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+.tap:active {
+  transform: scale(0.96);
+  opacity: 0.88;
+}
+
+.press {
+  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.15s ease;
+}
+.press:active {
+  transform: scale(0.98);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-screen-in,
+  .animate-row-in,
+  .animate-backdrop-in,
+  .animate-sheet-up,
+  .animate-toast-in,
+  .skeleton {
+    animation: none !important;
+  }
+  .tap:active,
+  .press:active {
+    transform: none !important;
+  }
+}

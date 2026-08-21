@@ -45,6 +45,8 @@ const daysAgo = (n) => {
   d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
 };
+// Staggered entrance delay for list rows — capped so long lists don't feel sluggish.
+const rowAnim = (i) => ({ className: "animate-row-in", style: { animationDelay: `${Math.min(i, 10) * 30}ms` } });
 
 /* ---------------------------------------------------------------- */
 /*  Supabase data layer                                              */
@@ -183,6 +185,54 @@ function Logo({ size = 44 }) {
     >
       <img src={LOGO_SRC} alt="Chaudhry Dairy Farm" width={size} height={size} className="w-full h-full object-cover" />
     </div>
+  );
+}
+
+// Signature loading motif: a drop falls, lands in the glass, the glass fills.
+// Loops continuously — used everywhere the app is waiting on something.
+function MilkLoader({ label, dark }) {
+  const fg = dark ? "#FFFFFF" : C.green;
+  const track = dark ? "rgba(255,255,255,0.25)" : C.line;
+  return (
+    <div className="flex flex-col items-center">
+      <svg width="56" height="56" viewBox="0 0 56 56" fill="none">
+        <g style={{ animation: "dropFall 1.6s cubic-bezier(0.55,0,1,0.45) infinite" }}>
+          <path d="M28 4c3 5 6 9 6 13a6 6 0 1 1-12 0c0-4 3-8 6-13Z" fill={fg} opacity="0.9" />
+        </g>
+        <ellipse cx="28" cy="26" rx="7" ry="2.4" style={{ transformOrigin: "28px 26px", animation: "ripple 1.6s cubic-bezier(0.55,0,1,0.45) infinite" }} stroke={fg} strokeWidth="1.4" opacity="0.6" />
+        <path d="M18 26h20l-2.5 22a3 3 0 0 1-3 2.7H23.5a3 3 0 0 1-3-2.7L18 26Z" stroke={track} strokeWidth="2" fill="none" />
+        <clipPath id="glassClip"><path d="M18.6 27h18.8l-2.4 20.7a2 2 0 0 1-2 1.8H23a2 2 0 0 1-2-1.8L18.6 27Z" /></clipPath>
+        <g clipPath="url(#glassClip)">
+          <rect x="17" y="27" width="22" height="22" fill={fg} style={{ transformOrigin: "28px 49px", animation: "glassFill 1.6s cubic-bezier(0.55,0,1,0.45) infinite" }} />
+        </g>
+      </svg>
+      {label && <p className="text-xs mt-2" style={{ color: dark ? "rgba(255,255,255,0.8)" : C.gray }}>{label}</p>}
+    </div>
+  );
+}
+
+function Skeleton({ className = "", style = {} }) {
+  return <div className={"skeleton rounded-lg " + className} style={style} />;
+}
+
+function DashboardSkeleton() {
+  return (
+    <Screen>
+      <div className="flex items-center gap-3 mb-5">
+        <Skeleton className="w-[46px] h-[46px] rounded-full" />
+        <div className="flex-1">
+          <Skeleton className="h-3 w-24 mb-2" />
+          <Skeleton className="h-4 w-40" />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2.5 mb-4">
+        {[...Array(6)].map((_, i) => <Skeleton key={i} className="h-[64px]" />)}
+      </div>
+      <Skeleton className="h-3 w-28 mb-2" />
+      <div className="grid grid-cols-3 gap-2 mb-5">
+        {[...Array(3)].map((_, i) => <Skeleton key={i} className="h-16" />)}
+      </div>
+    </Screen>
   );
 }
 
@@ -389,14 +439,14 @@ function FarmOnboarding({ userId, userEmail, onDone }) {
 }
 
 function Screen({ children }) {
-  return <div className="px-4 pt-4 pb-28 max-w-md mx-auto">{children}</div>;
+  return <div className="px-4 pt-4 pb-28 max-w-md mx-auto animate-screen-in">{children}</div>;
 }
 
 function TopBar({ title, subtitle, onBack, right }) {
   return (
     <div className="flex items-center gap-2 mb-4">
       {onBack && (
-        <button onClick={onBack} className="p-2 -ml-2 rounded-full active:bg-black/5">
+        <button onClick={onBack} className="p-2 -ml-2 rounded-full tap active:bg-black/5">
           <ArrowLeft size={20} color={C.green} />
         </button>
       )}
@@ -412,8 +462,8 @@ function TopBar({ title, subtitle, onBack, right }) {
 function Card({ children, className = "", style = {} }) {
   return (
     <div
-      className={"rounded-2xl bg-white p-4 shadow-sm " + className}
-      style={{ border: `1px solid ${C.line}`, ...style }}
+      className={"rounded-2xl bg-white p-4 shadow-sm press " + className}
+      style={{ border: `1px solid ${C.line}`, boxShadow: "0 1px 2px rgba(31,77,44,0.05), 0 1px 1px rgba(31,77,44,0.03)", ...style }}
     >
       {children}
     </div>
@@ -438,7 +488,10 @@ function Badge({ children, tone = "green" }) {
 function StatCard({ icon, label, value, tone = "green" }) {
   const tones = { green: C.green, warn: C.warn, danger: C.danger, gray: C.gray };
   return (
-    <div className="rounded-2xl bg-white p-3 shadow-sm relative overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+    <div
+      className="rounded-2xl bg-white p-3 relative overflow-hidden press"
+      style={{ border: `1px solid ${C.line}`, boxShadow: "0 1px 2px rgba(31,77,44,0.05), 0 1px 1px rgba(31,77,44,0.03)" }}
+    >
       <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ background: tones[tone] }} />
       <div className="pl-2">
         <div className="flex items-center gap-1.5 mb-1" style={{ color: C.gray }}>
@@ -460,15 +513,15 @@ function Field({ label, children }) {
   );
 }
 
-const inputCls = "w-full rounded-xl px-3 py-2.5 text-sm outline-none bg-white";
-const inputStyle = { border: `1px solid ${C.line}`, color: C.text };
+const inputCls = "w-full rounded-xl px-3 py-2.5 text-sm outline-none bg-white transition-shadow duration-150 focus:ring-2";
+const inputStyle = { border: `1px solid ${C.line}`, color: C.text, "--tw-ring-color": "rgba(31,77,44,0.18)" };
 
 function Btn({ children, onClick, variant = "primary", full, className = "", type = "button", disabled }) {
-  const base = "rounded-xl px-4 py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5 active:opacity-80 transition-opacity";
+  const base = "rounded-xl px-4 py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5 tap";
   const styles = {
-    primary: { background: C.green, color: C.white },
+    primary: { background: C.green, color: C.white, boxShadow: "0 2px 6px rgba(31,77,44,0.25)" },
     outline: { background: "transparent", color: C.green, border: `1.5px solid ${C.green}` },
-    danger: { background: C.danger, color: C.white },
+    danger: { background: C.danger, color: C.white, boxShadow: "0 2px 6px rgba(199,75,63,0.25)" },
     ghost: { background: C.greenPale, color: C.green },
   };
   return (
@@ -485,13 +538,28 @@ function Btn({ children, onClick, variant = "primary", full, className = "", typ
 }
 
 function Sheet({ title, onClose, children, footer }) {
+  const [closing, setClosing] = useState(false);
+  const handleClose = () => {
+    setClosing(true);
+    setTimeout(onClose, 180);
+  };
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-md bg-white rounded-t-3xl max-h-[88vh] flex flex-col">
-        <div className="flex items-center justify-between px-5 pt-4 pb-3" style={{ borderBottom: `1px solid ${C.line}` }}>
+      <div
+        className={closing ? "" : "animate-backdrop-in"}
+        style={{ position: "absolute", inset: 0, background: "rgba(18,48,24,0.45)", opacity: closing ? 0 : undefined, transition: closing ? "opacity 0.18s ease" : undefined }}
+        onClick={handleClose}
+      />
+      <div
+        className={"relative w-full max-w-md bg-white rounded-t-3xl max-h-[88vh] flex flex-col " + (closing ? "" : "animate-sheet-up")}
+        style={{ transform: closing ? "translateY(100%)" : undefined, opacity: closing ? 0 : undefined, transition: closing ? "transform 0.18s ease, opacity 0.18s ease" : undefined }}
+      >
+        <div className="flex justify-center pt-2.5 pb-1">
+          <div className="w-9 h-1 rounded-full" style={{ background: C.line }} />
+        </div>
+        <div className="flex items-center justify-between px-5 pt-1 pb-3" style={{ borderBottom: `1px solid ${C.line}` }}>
           <h2 className="font-display text-lg font-semibold" style={{ color: C.text }}>{title}</h2>
-          <button onClick={onClose} className="p-1 rounded-full active:bg-black/5">
+          <button onClick={handleClose} className="p-1 rounded-full tap active:bg-black/5">
             <X size={20} color={C.gray} />
           </button>
         </div>
@@ -504,7 +572,7 @@ function Sheet({ title, onClose, children, footer }) {
 
 function Empty({ icon, title, note, actionLabel, onAction }) {
   return (
-    <div className="text-center py-12">
+    <div className="text-center py-12 animate-row-in">
       <div className="mx-auto mb-3 w-14 h-14 rounded-full flex items-center justify-center" style={{ background: C.greenPale }}>
         {icon}
       </div>
@@ -523,7 +591,7 @@ function RowActions({ onEdit, onDelete }) {
       {onEdit && (
         <button
           onClick={(e) => { e.stopPropagation(); onEdit(); }}
-          className="p-1.5 rounded-full active:bg-black/5"
+          className="p-1.5 rounded-full tap active:bg-black/5"
           aria-label="Edit"
         >
           <Pencil size={14} color={C.gray} />
@@ -535,7 +603,7 @@ function RowActions({ onEdit, onDelete }) {
             e.stopPropagation();
             if (window.confirm("Delete this entry? This cannot be undone.")) onDelete();
           }}
-          className="p-1.5 rounded-full active:bg-black/5"
+          className="p-1.5 rounded-full tap active:bg-black/5"
           aria-label="Delete"
         >
           <Trash2 size={14} color={C.danger} />
@@ -679,7 +747,8 @@ export default function ChaudhryDairyFarm() {
         <style>{fontImport}</style>
         <Logo size={72} />
         <p className="font-display text-white text-xl font-bold mt-4">Chaudhry Dairy Farm</p>
-        <p className="text-white/70 text-xs mt-1">Dairy Farm Management System</p>
+        <p className="text-white/70 text-xs mt-1 mb-6">Dairy Farm Management System</p>
+        <MilkLoader dark />
       </div>
     );
   }
@@ -692,8 +761,7 @@ export default function ChaudhryDairyFarm() {
     return (
       <div className="h-screen flex flex-col items-center justify-center" style={{ background: C.green }}>
         <style>{fontImport}</style>
-        <Logo size={72} />
-        <p className="text-white/70 text-xs mt-4">Loading your farm&hellip;</p>
+        <MilkLoader dark label="Loading your farm…" />
       </div>
     );
   }
@@ -704,10 +772,9 @@ export default function ChaudhryDairyFarm() {
 
   if (!data) {
     return (
-      <div className="h-screen flex flex-col items-center justify-center" style={{ background: C.green }}>
+      <div className="min-h-screen font-body animate-screen-in" style={{ background: C.cream }}>
         <style>{fontImport}</style>
-        <Logo size={72} />
-        <p className="text-white/70 text-xs mt-4">Loading farm data&hellip;</p>
+        <DashboardSkeleton />
       </div>
     );
   }
@@ -784,8 +851,13 @@ export default function ChaudhryDairyFarm() {
       )}
 
       {toast && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] px-4 py-2 rounded-full text-sm font-medium text-white shadow-lg" style={{ background: C.greenDark }}>
-          {toast}
+        <div className="fixed top-4 left-1/2 z-[60] animate-toast-in" style={{ transform: "translateX(-50%)" }}>
+          <div className="flex items-center gap-2 pl-3 pr-4 py-2.5 rounded-full text-sm font-medium text-white" style={{ background: C.greenDark, boxShadow: "0 8px 20px rgba(18,48,24,0.35)" }}>
+            <div className="w-4 h-4 rounded-full flex items-center justify-center shrink-0" style={{ background: "rgba(255,255,255,0.2)" }}>
+              <Check size={11} strokeWidth={3} />
+            </div>
+            {toast}
+          </div>
         </div>
       )}
 
@@ -812,7 +884,7 @@ function BottomNav({ tab, setTab }) {
     { key: "more", label: "More", icon: MoreHorizontal },
   ];
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 bg-white" style={{ borderTop: `1px solid ${C.line}` }}>
+    <div className="fixed bottom-0 left-0 right-0 z-40 bg-white" style={{ borderTop: `1px solid ${C.line}`, boxShadow: "0 -2px 10px rgba(31,77,44,0.06)" }}>
       <div className="max-w-md mx-auto flex">
         {items.map(({ key, label, icon: Icon }) => {
           const active = tab === key;
@@ -820,10 +892,14 @@ function BottomNav({ tab, setTab }) {
             <button
               key={key}
               onClick={() => setTab(key)}
-              className="flex-1 flex flex-col items-center gap-0.5 py-2.5"
+              className="flex-1 flex flex-col items-center gap-1 py-2.5 tap relative"
             >
-              <Icon size={20} color={active ? C.green : C.grayLight} strokeWidth={active ? 2.4 : 2} />
-              <span className="text-[10px] font-semibold" style={{ color: active ? C.green : C.grayLight }}>{label}</span>
+              <span
+                className="absolute top-1 w-8 h-8 rounded-full transition-all duration-200"
+                style={{ background: active ? C.greenPale : "transparent", transform: active ? "scale(1)" : "scale(0.6)", opacity: active ? 1 : 0 }}
+              />
+              <Icon size={20} color={active ? C.green : C.grayLight} strokeWidth={active ? 2.4 : 2} className="relative transition-transform duration-200" style={{ transform: active ? "translateY(-1px)" : "none" }} />
+              <span className="text-[10px] font-semibold relative transition-colors duration-200" style={{ color: active ? C.green : C.grayLight }}>{label}</span>
             </button>
           );
         })}
@@ -959,7 +1035,7 @@ function Dashboard({ data, role, setModal, goMore }) {
 
 function QuickAction({ icon, label, onClick }) {
   return (
-    <button onClick={onClick} className="rounded-2xl bg-white flex flex-col items-center justify-center gap-1.5 py-3 active:opacity-80" style={{ border: `1px solid ${C.line}` }}>
+    <button onClick={onClick} className="rounded-2xl bg-white flex flex-col items-center justify-center gap-1.5 py-3 press" style={{ border: `1px solid ${C.line}`, boxShadow: "0 1px 2px rgba(31,77,44,0.05)" }}>
       <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: C.greenPale, color: C.green }}>{icon}</div>
       <span className="text-[11px] font-semibold" style={{ color: C.text }}>{label}</span>
     </button>
@@ -968,7 +1044,7 @@ function QuickAction({ icon, label, onClick }) {
 
 function AlertRow({ title, detail, onClick }) {
   return (
-    <button onClick={onClick} className="w-full text-left rounded-xl px-3 py-2.5 flex items-start gap-2.5" style={{ background: "#FBEBD6" }}>
+    <button onClick={onClick} className="w-full text-left rounded-xl px-3 py-2.5 flex items-start gap-2.5 tap animate-row-in" style={{ background: "#FBEBD6" }}>
       <AlertTriangle size={16} color={C.warn} className="mt-0.5 shrink-0" />
       <div>
         <p className="text-xs font-semibold" style={{ color: C.text }}>{title}</p>
@@ -1074,10 +1150,10 @@ function MilkScreen({ data, update, notify }) {
         <div className="flex flex-col gap-2">
           {recent.length === 0 ? (
             <Empty icon={<Droplet size={22} color={C.green} />} title="No records yet" note="Recorded milk entries will appear here." />
-          ) : recent.map((m) => {
+          ) : recent.map((m, i) => {
             const a = data.animals.find((x) => x.id === m.animalId);
             return (
-              <Card key={m.id} className="flex items-center justify-between !py-3">
+              <Card key={m.id} className="flex items-center justify-between !py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
                 <div>
                   <p className="text-sm font-semibold" style={{ color: C.text }}>{a ? `${a.name} · ${a.code}` : "Unknown"}</p>
                   <p className="text-[11px]" style={{ color: C.gray }}>{fmtDate(m.date)} · {m.session}</p>
@@ -1178,10 +1254,10 @@ function SalesScreen({ data, setData, notify, setModal }) {
         <Empty icon={<ShoppingCart size={22} color={C.green} />} title="No sales yet" note="Record your first milk sale." actionLabel="Add Sale" onAction={() => setModal("addSale")} />
       ) : (
         <div className="flex flex-col gap-2">
-          {list.map((s) => {
+          {list.map((s, i) => {
             const c = data.customers.find((x) => x.id === s.customerId);
             return (
-              <Card key={s.id} className="!py-3">
+              <Card key={s.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-sm font-semibold" style={{ color: C.text }}>{c ? c.name : "Unknown"}</p>
                   <Badge tone={s.paymentStatus === "Paid" ? "green" : "warn"}>{s.paymentStatus}</Badge>
@@ -1297,8 +1373,8 @@ function CustomersScreen({ data, setData, onOpen, setModal, notify }) {
         <Empty icon={<Users size={22} color={C.green} />} title="No customers yet" note="Add your first customer to start tracking milk sales." actionLabel="Add Customer" onAction={() => setShowAdd(true)} />
       ) : (
         <div className="flex flex-col gap-2">
-          {list.map((c) => (
-            <div key={c.id} onClick={() => onOpen(c.id)} className="w-full text-left cursor-pointer">
+          {list.map((c, i) => (
+            <div key={c.id} onClick={() => onOpen(c.id)} className="w-full text-left cursor-pointer animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
               <Card className="flex items-center justify-between !py-3">
                 <div>
                   <p className="text-sm font-semibold" style={{ color: C.text }}>{c.name}</p>
@@ -1672,8 +1748,8 @@ function AnimalsScreen({ data, setData, onBack, onOpen, notify }) {
         <Empty icon={<PawPrint size={22} color={C.green} />} title="No animals" note="Add your first animal to the herd." actionLabel="Add Animal" onAction={() => setShowAdd(true)} />
       ) : (
         <div className="flex flex-col gap-2">
-          {list.map((a) => (
-            <button key={a.id} onClick={() => onOpen(a.id)} className="w-full text-left">
+          {list.map((a, i) => (
+            <button key={a.id} onClick={() => onOpen(a.id)} className="w-full text-left animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
               <Card className="flex items-center justify-between !py-3">
                 <div>
                   <p className="text-sm font-semibold" style={{ color: C.text }}>{a.name} <span style={{ color: C.grayLight }}>· {a.code}</span></p>
@@ -2032,11 +2108,11 @@ function InventoryScreen({ data, setData, onBack, notify }) {
         <Empty icon={<Package size={22} color={C.green} />} title="No inventory items" note="Add feed, medicine or supplies." actionLabel="Add Item" onAction={() => setShowAdd(true)} />
       ) : (
         <div className="flex flex-col gap-2">
-          {data.inventory.map((i) => {
+          {data.inventory.map((i, idx) => {
             const low = i.currentStock <= i.minimumStock;
             const pct = Math.min(100, Math.round((i.currentStock / (i.minimumStock * 2 || 1)) * 100));
             return (
-              <Card key={i.id} className="!py-3">
+              <Card key={i.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(idx, 10) * 30}ms` }}>
                 <div className="flex items-center justify-between mb-1.5">
                   <p className="text-sm font-semibold" style={{ color: C.text }}>{i.name}</p>
                   <div className="flex items-center gap-1.5">
@@ -2144,8 +2220,8 @@ function PurchasesScreen({ data, setData, onBack, notify }) {
         <Empty icon={<Truck size={22} color={C.green} />} title="No purchases yet" note="Record purchases from suppliers." actionLabel="Add Purchase" onAction={() => setShowAdd(true)} />
       ) : (
         <div className="flex flex-col gap-2">
-          {[...data.purchases].sort((a, b) => b.date.localeCompare(a.date)).map((p) => (
-            <Card key={p.id} className="!py-3">
+          {[...data.purchases].sort((a, b) => b.date.localeCompare(a.date)).map((p, i) => (
+            <Card key={p.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
               <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-semibold" style={{ color: C.text }}>{p.supplier}</p>
                 <div className="flex items-center gap-1.5">
@@ -2276,8 +2352,8 @@ function ExpensesScreen({ data, setData, onBack, notify }) {
         <Empty icon={<Wallet size={22} color={C.green} />} title="No expenses yet" note="Track feed, salaries and other costs." actionLabel="Add Expense" onAction={() => setShowAdd(true)} />
       ) : (
         <div className="flex flex-col gap-2">
-          {[...data.expenses].sort((a, b) => b.date.localeCompare(a.date)).map((e) => (
-            <Card key={e.id} className="flex items-center justify-between !py-3">
+          {[...data.expenses].sort((a, b) => b.date.localeCompare(a.date)).map((e, i) => (
+            <Card key={e.id} className="flex items-center justify-between !py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
               <div>
                 <p className="text-sm font-semibold" style={{ color: C.text }}>{e.category}</p>
                 <p className="text-[11px]" style={{ color: C.gray }}>{fmtDate(e.date)} · {e.paymentMethod}{e.description ? " · " + e.description : ""}</p>
@@ -2356,11 +2432,11 @@ function EmployeesScreen({ data, setData, onBack, notify }) {
         <Empty icon={<UserCog size={22} color={C.green} />} title="No employees" note="Add your farm staff." actionLabel="Add Employee" onAction={() => setShowAdd(true)} />
       ) : (
         <div className="flex flex-col gap-2">
-          {data.employees.map((e) => {
+          {data.employees.map((e, i) => {
             const paid = data.salaryPayments.filter((p) => p.employeeId === e.id && p.month === monthKey).reduce((s, p) => s + p.paidAmount, 0);
             const remaining = e.salary - paid;
             return (
-              <Card key={e.id} className="!py-3">
+              <Card key={e.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-sm font-semibold" style={{ color: C.text }}>{e.name}</p>
                   <div className="flex items-center gap-1.5">
