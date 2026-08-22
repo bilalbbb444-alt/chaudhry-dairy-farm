@@ -1013,6 +1013,12 @@ export default function ChaudhryDairyFarm() {
       {modal === "addPurchase" && (
         <PurchaseModal data={data} setData={setData} onClose={() => setModal(null)} notify={notify} />
       )}
+      {modal === "addCustomer" && (
+        <CustomerModal setData={setData} onClose={() => setModal(null)} notify={notify} />
+      )}
+      {modal === "quickAdd" && (
+        <QuickAddSheet role={role} onClose={() => setModal(null)} onPick={(m) => setModal(m)} />
+      )}
 
       {toast && (
         <div className="fixed top-4 left-1/2 z-[60] animate-toast-in" style={{ transform: "translateX(-50%)" }}>
@@ -1044,7 +1050,7 @@ export default function ChaudhryDairyFarm() {
         </div>
       )}
 
-      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} />
+      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} onQuickAdd={() => setModal("quickAdd")} />
     </div>
   );
 }
@@ -1058,7 +1064,7 @@ const fontImport = `
 /* ---------------------------------------------------------------- */
 /*  Bottom Nav                                                       */
 /* ---------------------------------------------------------------- */
-function BottomNav({ tab, setTab }) {
+function BottomNav({ tab, setTab, onQuickAdd }) {
   const items = [
     { key: "dashboard", label: "Home", icon: Home },
     { key: "milk", label: "Milk", icon: Droplet },
@@ -1067,27 +1073,73 @@ function BottomNav({ tab, setTab }) {
     { key: "more", label: "More", icon: MoreHorizontal },
   ];
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 bg-white" style={{ borderTop: `1px solid ${C.line}`, boxShadow: "0 -2px 10px rgba(31,77,44,0.06)" }}>
-      <div className="max-w-md mx-auto flex">
-        {items.map(({ key, label, icon: Icon }) => {
-          const active = tab === key;
-          return (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className="flex-1 flex flex-col items-center gap-1 py-2.5 tap relative"
-            >
-              <span
-                className="absolute top-1 w-8 h-8 rounded-full transition-all duration-200"
-                style={{ background: active ? C.greenPale : "transparent", transform: active ? "scale(1)" : "scale(0.6)", opacity: active ? 1 : 0 }}
-              />
-              <Icon size={20} color={active ? C.green : C.grayLight} strokeWidth={active ? 2.4 : 2} className="relative transition-transform duration-200" style={{ transform: active ? "translateY(-1px)" : "none" }} />
-              <span className="text-[10px] font-semibold relative transition-colors duration-200" style={{ color: active ? C.green : C.grayLight }}>{label}</span>
-            </button>
-          );
-        })}
+    <div className="fixed bottom-0 left-0 right-0 z-40 px-3 pb-3 pt-1">
+      <div className="max-w-md mx-auto relative">
+        <button
+          onClick={onQuickAdd}
+          aria-label="Quick Add"
+          className="absolute left-1/2 tap flex items-center justify-center"
+          style={{ top: -22, transform: "translateX(-50%)", width: 46, height: 46, borderRadius: "50%", background: C.green, boxShadow: "0 8px 18px rgba(31,77,44,0.4)", border: `3px solid ${C.cream}` }}
+        >
+          <Plus size={20} color="#fff" strokeWidth={2.6} />
+        </button>
+        <div className="flex bg-white rounded-[26px]" style={{ border: `1px solid ${C.line}`, boxShadow: "0 -2px 4px rgba(31,77,44,0.04), 0 6px 18px rgba(31,77,44,0.10)" }}>
+          {items.map(({ key, label, icon: Icon }, i) => {
+            const active = tab === key;
+            const isCenterGap = i === 2; // visually reserve breathing room under the FAB
+            return (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={"flex-1 flex flex-col items-center gap-1 py-2.5 tap relative" + (isCenterGap ? " ml-1" : "")}
+              >
+                <span
+                  className="absolute top-1 w-8 h-8 rounded-full transition-all duration-200"
+                  style={{ background: active ? C.greenPale : "transparent", transform: active ? "scale(1)" : "scale(0.6)", opacity: active ? 1 : 0 }}
+                />
+                <Icon size={19} color={active ? C.green : C.grayLight} strokeWidth={active ? 2.4 : 2} className="relative transition-transform duration-200" style={{ transform: active ? "translateY(-1px)" : "none" }} />
+                <span className="text-[9.5px] font-semibold relative transition-colors duration-200" style={{ color: active ? C.green : C.grayLight }}>{label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
+  );
+}
+
+function QuickAddSheet({ role, onClose, onPick }) {
+  const isEmployee = role === "Employee";
+  const actions = [
+    { key: "addMilk", label: "Add Milk", icon: <Droplet size={20} />, tone: "green" },
+    { key: "addSale", label: "Record Sale", icon: <ShoppingCart size={20} />, tone: "gold" },
+    ...(!isEmployee ? [
+      { key: "addCustomer", label: "Add Customer", icon: <Users size={20} />, tone: "green" },
+      { key: "addExpense", label: "Add Expense", icon: <Wallet size={20} />, tone: "warn" },
+      { key: "addPayment", label: "Add Payment", icon: <Banknote size={20} />, tone: "green" },
+      { key: "addPurchase", label: "Add Purchase", icon: <Truck size={20} />, tone: "gold" },
+    ] : []),
+  ];
+  const toneBg = { green: C.greenPale, gold: C.goldSoft || "#F6EFD8", warn: "#FBEBD6" };
+  const toneFg = { green: C.green, gold: "#8A6B10", warn: "#A65A29" };
+  return (
+    <Sheet title="Quick Add" onClose={onClose}>
+      <div className="grid grid-cols-2 gap-3 pb-2">
+        {actions.map((a) => (
+          <button
+            key={a.key}
+            onClick={() => onPick(a.key)}
+            className="rounded-2xl p-4 flex flex-col items-center text-center tap"
+            style={{ border: `1px solid ${C.line}`, background: C.white }}
+          >
+            <div className="w-12 h-12 rounded-2xl flex items-center justify-center mb-2" style={{ background: toneBg[a.tone], color: toneFg[a.tone] }}>
+              {a.icon}
+            </div>
+            <span className="text-[12.5px] font-bold" style={{ color: C.text }}>{a.label}</span>
+          </button>
+        ))}
+      </div>
+    </Sheet>
   );
 }
 
@@ -1152,39 +1204,89 @@ function Dashboard({ data, role, setModal, goMore }) {
   });
   const vaccinationsDue = data.vaccinations.filter((v) => v.nextDueDate && v.nextDueDate <= daysAgo(-7));
 
+  const totalAlerts = lowStock.length + (isEmployee ? 0 : overdueCustomers.length + (salaryDue.length > 0 ? 1 : 0)) + (data.animals.some((a) => a.status === "Sick") ? 1 : 0) + (vaccinationsDue.length > 0 ? 1 : 0);
+
   return (
     <Screen>
-      <div className="flex items-center gap-3 mb-5">
-        <Logo size={46} />
+      {/* header */}
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <p className="text-xs" style={{ color: C.gray }}>Good morning 👋</p>
+          <p className="text-xs font-semibold" style={{ color: C.gray }}>Good Morning 👋</p>
           <h1 className="font-display text-lg font-bold" style={{ color: C.text }}>{data.settings.farmName}</h1>
-          <p className="text-[11px]" style={{ color: C.grayLight }}>{fmtDate(today())} &middot; {role}</p>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <button className="w-9 h-9 rounded-full flex items-center justify-center relative tap" style={{ background: C.white, border: `1px solid ${C.line}` }}>
+            <Bell size={16} color={C.text} />
+            {totalAlerts > 0 && <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full" style={{ background: C.danger }} />}
+          </button>
+          <Logo size={38} />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-2.5 mb-4">
-        <StatCard icon={<Droplet size={14} />} label="Milk Produced" value={fmtL(t.milkProduced)} />
+      {/* signature hero card — calm solid green, faint wave, restrained */}
+      <div className="rounded-[22px] p-4 mb-4 relative overflow-hidden" style={{ background: C.green }}>
+        <svg className="absolute inset-x-0 bottom-0 w-full opacity-[0.08]" height="60" viewBox="0 0 375 60" preserveAspectRatio="none">
+          <path d="M0 38 C 70 20, 120 50, 190 32 S 310 15, 375 38 V60 H0 Z" fill="#fff" />
+        </svg>
+        <p className="relative text-white/75 text-[10.5px] font-bold tracking-[0.12em] mb-3">TODAY'S FARM PERFORMANCE</p>
+        <div className="relative flex items-center">
+          <div className="flex-1">
+            <p className="font-display text-xl font-bold text-white leading-none">{fmtL(t.milkProduced)}</p>
+            <p className="text-white/65 text-[10px] mt-1.5">Milk Produced</p>
+          </div>
+          {!isEmployee ? (
+            <>
+              <div className="flex-1">
+                <p className="font-display text-xl font-bold leading-none" style={{ color: "#E9C765" }}>{fmt(t.salesTotal)}</p>
+                <p className="text-white/65 text-[10px] mt-1.5">Revenue</p>
+              </div>
+              <div className="flex-1">
+                <p className="font-display text-xl font-bold text-white leading-none">{fmt(t.profit)}</p>
+                <p className="text-white/65 text-[10px] mt-1.5">Net Profit</p>
+              </div>
+            </>
+          ) : (
+            <div className="flex-1">
+              <p className="font-display text-xl font-bold text-white leading-none">{fmtL(t.milkSold)}</p>
+              <p className="text-white/65 text-[10px] mt-1.5">Milk Sold</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* financial overview — horizontal scroll, hidden for Employee */}
+      {!isEmployee && (
+        <>
+          <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>FINANCIAL OVERVIEW</p>
+          <div className="flex gap-2 overflow-x-auto pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
+            <FinCard label="Revenue" value={fmt(t.salesTotal)} />
+            <FinCard label="Expenses" value={fmt(t.dayExpenses)} tone="warn" />
+            <FinCard label="Profit" value={fmt(t.profit)} tone={t.profit >= 0 ? "green" : "danger"} />
+            <FinCard label="Customer Due" value={fmt(custOutstanding)} tone="warn" />
+            <FinCard label="Supplier Due" value={fmt(supplierBalance)} tone="warn" />
+            <FinCard label="Stock Value" value={fmt(stockValue)} />
+          </div>
+        </>
+      )}
+
+      {/* operational row */}
+      <div className="grid grid-cols-2 gap-2.5 mb-5">
         <StatCard icon={<Droplet size={14} />} label="Milk Sold" value={fmtL(t.milkSold)} />
-        <StatCard icon={<Banknote size={14} />} label="Sales" value={fmt(t.salesTotal)} />
-        {!isEmployee && <StatCard icon={<Wallet size={14} />} label="Expenses" value={fmt(t.dayExpenses)} tone="warn" />}
-        {!isEmployee && <StatCard icon={<TrendingUp size={14} />} label="Profit" value={fmt(t.profit)} tone={t.profit >= 0 ? "green" : "danger"} />}
-        {!isEmployee && <StatCard icon={<Users size={14} />} label="Customer Due" value={fmt(custOutstanding)} tone="warn" />}
-        {!isEmployee && <StatCard icon={<Truck size={14} />} label="Supplier Due" value={fmt(supplierBalance)} tone="warn" />}
-        {!isEmployee && <StatCard icon={<Package size={14} />} label="Stock Value" value={fmt(stockValue)} />}
         <StatCard icon={<PawPrint size={14} />} label="Animals" value={activeAnimals} />
       </div>
 
+      {/* quick actions */}
       <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>QUICK ACTIONS</p>
       <div className="grid grid-cols-3 gap-2 mb-5">
         <QuickAction icon={<Droplet size={18} />} label="Add Milk" onClick={() => setModal("addMilk")} />
         <QuickAction icon={<ShoppingCart size={18} />} label="Sell Milk" onClick={() => setModal("addSale")} />
+        {!isEmployee && <QuickAction icon={<Users size={18} />} label="Customer" onClick={() => setModal("addCustomer")} />}
         {!isEmployee && <QuickAction icon={<Wallet size={18} />} label="Expense" onClick={() => setModal("addExpense")} />}
         {!isEmployee && <QuickAction icon={<Banknote size={18} />} label="Payment" onClick={() => setModal("addPayment")} />}
         {!isEmployee && <QuickAction icon={<Truck size={18} />} label="Purchase" onClick={() => setModal("addPurchase")} />}
       </div>
 
-      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>ALERTS</p>
+      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>SMART ALERTS</p>
       <div className="flex flex-col gap-2">
         {lowStock.map((i) => (
           <AlertRow key={i.id} title={`${i.name} stock is low`} detail={`Current: ${i.currentStock} ${i.unit} · Minimum: ${i.minimumStock} ${i.unit}`} onClick={() => goMore("inventory")} />
@@ -1213,6 +1315,16 @@ function Dashboard({ data, role, setModal, goMore }) {
         )}
       </div>
     </Screen>
+  );
+}
+
+function FinCard({ label, value, tone = "text" }) {
+  const colorMap = { text: C.text, warn: C.warn, danger: C.danger, green: C.green };
+  return (
+    <div className="rounded-2xl px-3.5 py-3 shrink-0" style={{ width: 108, background: C.white, border: `1px solid ${C.line}` }}>
+      <p className="text-[9.5px] font-semibold mb-1.5" style={{ color: C.gray }}>{label}</p>
+      <p className="font-display text-[13px] font-bold" style={{ color: colorMap[tone] }}>{value}</p>
+    </div>
   );
 }
 
