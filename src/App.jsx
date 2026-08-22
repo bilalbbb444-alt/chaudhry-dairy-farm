@@ -1050,7 +1050,7 @@ export default function ChaudhryDairyFarm() {
         </div>
       )}
 
-      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} onQuickAdd={() => setModal("quickAdd")} />
+      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} />
     </div>
   );
 }
@@ -1064,7 +1064,7 @@ const fontImport = `
 /* ---------------------------------------------------------------- */
 /*  Bottom Nav                                                       */
 /* ---------------------------------------------------------------- */
-function BottomNav({ tab, setTab, onQuickAdd }) {
+function BottomNav({ tab, setTab }) {
   const items = [
     { key: "dashboard", label: "Home", icon: Home },
     { key: "milk", label: "Milk", icon: Droplet },
@@ -1073,36 +1073,25 @@ function BottomNav({ tab, setTab, onQuickAdd }) {
     { key: "more", label: "More", icon: MoreHorizontal },
   ];
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 px-3 pb-3 pt-1">
-      <div className="max-w-md mx-auto relative">
-        <button
-          onClick={onQuickAdd}
-          aria-label="Quick Add"
-          className="absolute left-1/2 tap flex items-center justify-center"
-          style={{ top: -22, transform: "translateX(-50%)", width: 46, height: 46, borderRadius: "50%", background: C.green, boxShadow: "0 8px 18px rgba(31,77,44,0.4)", border: `3px solid ${C.cream}` }}
-        >
-          <Plus size={20} color="#fff" strokeWidth={2.6} />
-        </button>
-        <div className="flex bg-white rounded-[26px]" style={{ border: `1px solid ${C.line}`, boxShadow: "0 -2px 4px rgba(31,77,44,0.04), 0 6px 18px rgba(31,77,44,0.10)" }}>
-          {items.map(({ key, label, icon: Icon }, i) => {
-            const active = tab === key;
-            const isCenterGap = i === 2; // visually reserve breathing room under the FAB
-            return (
-              <button
-                key={key}
-                onClick={() => setTab(key)}
-                className={"flex-1 flex flex-col items-center gap-1 py-2.5 tap relative" + (isCenterGap ? " ml-1" : "")}
-              >
-                <span
-                  className="absolute top-1 w-8 h-8 rounded-full transition-all duration-200"
-                  style={{ background: active ? C.greenPale : "transparent", transform: active ? "scale(1)" : "scale(0.6)", opacity: active ? 1 : 0 }}
-                />
-                <Icon size={19} color={active ? C.green : C.grayLight} strokeWidth={active ? 2.4 : 2} className="relative transition-transform duration-200" style={{ transform: active ? "translateY(-1px)" : "none" }} />
-                <span className="text-[9.5px] font-semibold relative transition-colors duration-200" style={{ color: active ? C.green : C.grayLight }}>{label}</span>
-              </button>
-            );
-          })}
-        </div>
+    <div className="fixed bottom-0 left-0 right-0 z-40 bg-white" style={{ borderTop: `1px solid ${C.line}`, boxShadow: "0 -2px 10px rgba(31,77,44,0.06)" }}>
+      <div className="max-w-md mx-auto flex">
+        {items.map(({ key, label, icon: Icon }) => {
+          const active = tab === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className="flex-1 flex flex-col items-center gap-1 py-2.5 tap relative"
+            >
+              <span
+                className="absolute top-1 w-8 h-8 rounded-full transition-all duration-200"
+                style={{ background: active ? C.greenPale : "transparent", transform: active ? "scale(1)" : "scale(0.6)", opacity: active ? 1 : 0 }}
+              />
+              <Icon size={20} color={active ? C.green : C.grayLight} strokeWidth={active ? 2.4 : 2} className="relative transition-transform duration-200" style={{ transform: active ? "translateY(-1px)" : "none" }} />
+              <span className="text-[10px] font-semibold relative transition-colors duration-200" style={{ color: active ? C.green : C.grayLight }}>{label}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1259,9 +1248,7 @@ function Dashboard({ data, role, setModal, goMore }) {
         <>
           <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>FINANCIAL OVERVIEW</p>
           <div className="flex gap-2 overflow-x-auto pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
-            <FinCard label="Revenue" value={fmt(t.salesTotal)} />
             <FinCard label="Expenses" value={fmt(t.dayExpenses)} tone="warn" />
-            <FinCard label="Profit" value={fmt(t.profit)} tone={t.profit >= 0 ? "green" : "danger"} />
             <FinCard label="Customer Due" value={fmt(custOutstanding)} tone="warn" />
             <FinCard label="Supplier Due" value={fmt(supplierBalance)} tone="warn" />
             <FinCard label="Stock Value" value={fmt(stockValue)} />
