@@ -33,6 +33,12 @@ export default defineConfig({
             handler: "NetworkOnly",
           },
         ],
+        // Force the new service worker to take over immediately on deploy,
+        // instead of waiting for every open tab to close first — this is
+        // what was causing "I pushed an update but the app still looks old".
+        skipWaiting: true,
+        clientsClaim: true,
+        cleanupOutdatedCaches: true,
       },
     }),
   ],
