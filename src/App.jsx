@@ -6,7 +6,7 @@ import {
   ChevronRight, ChevronLeft, X, Check, TrendingUp, Package, Wallet, FileText,
   Settings as SettingsIcon, Bell, Search, ArrowLeft, Phone, MapPin, Calendar,
   Banknote, Truck, PawPrint, Printer, Share2, UserCog, Stethoscope, Pencil, Trash2,
-  Download, Lock, Mail, Delete, WifiOff, RefreshCw
+  Download, Lock, Mail, Delete, WifiOff, RefreshCw, Minus
 } from "lucide-react";
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, XAxis, YAxis,
@@ -1416,9 +1416,9 @@ function MilkScreen({ data, update, notify }) {
 
       {view === "bulk" && (
         <>
-          <div className="flex gap-2 mb-3">
+          <div className="flex mb-4 p-1 rounded-2xl" style={{ background: C.creamDark }}>
             {["Morning", "Evening"].map((s) => (
-              <button key={s} onClick={() => setSession(s)} className="flex-1 rounded-xl py-2 text-sm font-semibold" style={session === s ? { background: C.green, color: C.white } : { background: C.white, color: C.gray, border: `1px solid ${C.line}` }}>
+              <button key={s} onClick={() => setSession(s)} className="flex-1 rounded-xl py-2.5 text-sm font-bold tap" style={session === s ? { background: C.green, color: C.white } : { color: C.gray }}>
                 {s}
               </button>
             ))}
@@ -1427,27 +1427,47 @@ function MilkScreen({ data, update, notify }) {
             <Empty icon={<PawPrint size={22} color={C.green} />} title="No milking animals" note="Mark animals as Milking to record production." />
           ) : (
             <div className="flex flex-col gap-2 mb-4">
-              {milkingAnimals.map((a) => (
-                <Card key={a.id} className="flex items-center justify-between !py-3">
-                  <div>
-                    <p className="text-sm font-semibold" style={{ color: C.text }}>{a.name} <span style={{ color: C.grayLight }}>· {a.code}</span></p>
-                    <p className="text-[11px]" style={{ color: C.gray }}>{a.type} · {a.breed}</p>
-                  </div>
-                  <input
-                    type="number" inputMode="decimal" placeholder="0"
-                    value={entries[a.id] !== undefined ? entries[a.id] : existingFor(a.id)}
-                    onChange={(e) => setEntries((prev) => ({ ...prev, [a.id]: e.target.value }))}
-                    className="w-20 text-right rounded-lg px-2 py-1.5 text-sm font-semibold"
-                    style={{ border: `1px solid ${C.line}`, color: C.text }}
-                  />
-                </Card>
-              ))}
+              {milkingAnimals.map((a, i) => {
+                const val = entries[a.id] !== undefined ? entries[a.id] : existingFor(a.id);
+                const step = (d) => {
+                  const cur = parseFloat(val) || 0;
+                  const next = Math.max(0, Math.round((cur + d) * 10) / 10);
+                  setEntries((prev) => ({ ...prev, [a.id]: String(next) }));
+                };
+                return (
+                  <Card key={a.id} className="flex items-center !py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mr-3" style={{ background: C.greenPale, color: C.green }}>
+                      <PawPrint size={16} />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold" style={{ color: C.text }}>{a.name} <span style={{ color: C.grayLight }}>· {a.code}</span></p>
+                      <p className="text-[11px]" style={{ color: C.gray }}>{a.type} · {a.breed}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => step(-0.5)} className="w-6 h-6 rounded-full flex items-center justify-center tap shrink-0" style={{ background: C.creamDark, color: C.text }}><Minus size={12} /></button>
+                      <input
+                        type="number" inputMode="decimal" placeholder="0"
+                        value={val}
+                        onChange={(e) => setEntries((prev) => ({ ...prev, [a.id]: e.target.value }))}
+                        className="w-12 text-center rounded-lg px-1 py-1 text-sm font-bold font-display"
+                        style={{ border: `1px solid ${C.line}`, color: C.text }}
+                      />
+                      <button onClick={() => step(0.5)} className="w-6 h-6 rounded-full flex items-center justify-center tap shrink-0" style={{ background: C.green, color: "#fff" }}><Plus size={12} /></button>
+                    </div>
+                  </Card>
+                );
+              })}
             </div>
           )}
-          <Card className="flex items-center justify-between mb-4" style={{ background: C.greenPale, border: "none" }}>
-            <span className="text-sm font-semibold" style={{ color: C.green }}>Total {session} Milk</span>
-            <span className="font-display text-lg font-bold" style={{ color: C.green }}>{fmtL(total)}</span>
-          </Card>
+          <div className="rounded-[22px] p-4 mb-4 relative overflow-hidden" style={{ background: C.green }}>
+            <svg className="absolute inset-x-0 bottom-0 w-full opacity-[0.08]" height="40" viewBox="0 0 375 40" preserveAspectRatio="none">
+              <path d="M0 26 C 70 12, 120 34, 190 20 S 310 8, 375 26 V40 H0 Z" fill="#fff" />
+            </svg>
+            <div className="relative flex items-center justify-between">
+              <span className="text-sm font-semibold text-white/85">Total {session} Milk</span>
+              <span className="font-display text-xl font-bold text-white">{fmtL(total)}</span>
+            </div>
+          </div>
           {milkingAnimals.length > 0 && <Btn full onClick={save} disabled={saving}><Check size={16} /> {saving ? "Saving…" : "Save Entries"}</Btn>}
         </>
       )}
@@ -1573,7 +1593,7 @@ function SalesScreen({ data, setData, notify, setModal }) {
   return (
     <Screen>
       <TopBar title="Milk Sales" subtitle={`${data.sales.length} total sales`} right={
-        <button onClick={() => setModal("addSale")} className="p-2 rounded-full" style={{ background: C.green }}>
+        <button onClick={() => setModal("addSale")} className="p-2.5 rounded-full tap" style={{ background: C.gold, boxShadow: "0 4px 12px rgba(199,154,46,0.4)" }}>
           <Plus size={18} color="white" />
         </button>
       } />
@@ -1586,15 +1606,22 @@ function SalesScreen({ data, setData, notify, setModal }) {
             const c = data.customers.find((x) => x.id === s.customerId);
             return (
               <Card key={s.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
-                <div className="flex items-center justify-between mb-1">
-                  <p className="text-sm font-semibold" style={{ color: C.text }}>{c ? c.name : "Unknown"}</p>
-                  <Badge tone={s.paymentStatus === "Paid" ? "green" : "warn"}>{s.paymentStatus}</Badge>
-                </div>
-                <div className="flex items-center justify-between text-xs" style={{ color: C.gray }}>
-                  <span>{fmtDate(s.date)} · {fmtL(s.quantity)} @ {fmt(s.pricePerLiter)}/L · {s.paymentMethod}</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-display font-bold text-sm" style={{ color: C.green }}>{fmt(s.total)}</span>
-                    <RowActions onDelete={() => removeSale(s)} />
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 font-display font-bold text-xs text-white" style={{ background: C.green }}>
+                    {(c ? c.name : "?")[0].toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <p className="text-sm font-semibold truncate" style={{ color: C.text }}>{c ? c.name : "Unknown"}</p>
+                      <span className="font-display font-bold text-sm shrink-0 ml-2" style={{ color: C.text }}>{fmt(s.total)}</span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] truncate" style={{ color: C.gray }}>{fmtDate(s.date)} · {fmtL(s.quantity)} @ {fmt(s.pricePerLiter)}/L</p>
+                      <div className="flex items-center gap-1 shrink-0 ml-2">
+                        <Badge tone={s.paymentStatus === "Paid" ? "green" : "danger"}>{s.paymentStatus.toUpperCase()}</Badge>
+                        <RowActions onDelete={() => removeSale(s)} />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -1703,15 +1730,18 @@ function CustomersScreen({ data, setData, onOpen, setModal, notify }) {
         <div className="flex flex-col gap-2">
           {list.map((c, i) => (
             <div key={c.id} onClick={() => onOpen(c.id)} className="w-full text-left cursor-pointer animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
-              <Card className="flex items-center justify-between !py-3">
-                <div>
-                  <p className="text-sm font-semibold" style={{ color: C.text }}>{c.name}</p>
+              <Card className="flex items-center !py-3">
+                <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 mr-3 font-display font-bold text-sm text-white" style={{ background: C.green }}>
+                  {c.name[0].toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold truncate" style={{ color: C.text }}>{c.name}</p>
                   <p className="text-[11px]" style={{ color: C.gray }}>{fmtL(c.dailyQuantity)}/day @ {fmt(c.defaultPrice)}</p>
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 shrink-0">
                   <div className="text-right">
                     <p className="font-display font-bold text-sm" style={{ color: c.balance > 0 ? C.warn : C.green }}>{fmt(c.balance)}</p>
-                    <p className="text-[10px]" style={{ color: C.grayLight }}>{c.balance > 0 ? "due" : "settled"}</p>
+                    <Badge tone={c.balance > 0 ? "warn" : "green"}>{c.balance > 0 ? "DUE" : "SETTLED"}</Badge>
                   </div>
                   <RowActions onEdit={() => setEditCust(c)} onDelete={() => removeCustomer(c)} />
                 </div>
@@ -1804,10 +1834,16 @@ function CustomerProfile({ data, setData, custId, onBack, notify }) {
     <Screen>
       <TopBar title={c.name} subtitle={c.address} onBack={onBack} right={
         <div className="flex items-center gap-1">
-          <button onClick={() => setShowEdit(true)} className="p-2 rounded-full active:bg-black/5"><Pencil size={16} color={C.gray} /></button>
-          <button onClick={removeCustomer} className="p-2 rounded-full active:bg-black/5"><Trash2 size={16} color={C.danger} /></button>
+          <button onClick={() => setShowEdit(true)} className="p-2 rounded-full tap active:bg-black/5"><Pencil size={16} color={C.gray} /></button>
+          <button onClick={removeCustomer} className="p-2 rounded-full tap active:bg-black/5"><Trash2 size={16} color={C.danger} /></button>
         </div>
       } />
+      <div className="flex flex-col items-center text-center mb-4">
+        <div className="w-16 h-16 rounded-full flex items-center justify-center font-display font-bold text-xl text-white mb-2" style={{ background: C.green }}>
+          {c.name[0].toUpperCase()}
+        </div>
+        <Badge tone={c.balance > 0 ? "warn" : "green"}>{c.balance > 0 ? "CREDIT DUE" : "SETTLED"}</Badge>
+      </div>
       <Card className="mb-4">
         <div className="flex items-center gap-2 text-xs mb-2" style={{ color: C.gray }}><Phone size={13} /> {c.phone}</div>
         <div className="flex items-center gap-2 text-xs mb-3" style={{ color: C.gray }}><MapPin size={13} /> {c.address}</div>
