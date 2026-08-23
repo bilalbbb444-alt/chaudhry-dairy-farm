@@ -138,7 +138,7 @@ export async function buildCustomerStatementPdf(farmSettings, customer, sales, p
 }
 
 /* ---------------- Farm Profit & Loss PDF ---------------- */
-export async function buildProfitLossPdf(farmSettings, { mode, date, from, to, totals }) {
+export async function buildProfitLossPdf(farmSettings, { mode, date, from, to, totals, supplierPayments, customerPayments }) {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const logo = await loadLogoDataUrl();
   drawHeader(doc, farmSettings, "Farm Profit & Loss Report", logo);
@@ -174,6 +174,127 @@ export async function buildProfitLossPdf(farmSettings, { mode, date, from, to, t
         data.cell.styles.fontStyle = "bold";
       }
     },
+  });
+
+  let y = doc.lastAutoTable.finY + 10;
+
+  if (customerPayments && customerPayments.length > 0) {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(...GREEN);
+    doc.text("Payments Received — By Customer", 12, y);
+    autoTable(doc, {
+      startY: y + 3,
+      head: [["Customer", "Amount Received"]],
+      body: customerPayments.map((c) => [c.name, fmtMoney(c.amount)]),
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: GREEN, textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [246, 241, 226] },
+      columnStyles: { 1: { halign: "right" } },
+    });
+    y = doc.lastAutoTable.finY + 10;
+  }
+
+  if (supplierPayments && supplierPayments.length > 0) {
+    if (y > 250) { doc.addPage(); y = 20; }
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(...GREEN);
+    doc.text("Payments Made — By Supplier", 12, y);
+    autoTable(doc, {
+      startY: y + 3,
+      head: [["Supplier", "Amount Paid"]],
+      body: supplierPayments.map((s) => [s.name, fmtMoney(s.amount)]),
+      styles: { fontSize: 9, cellPadding: 3 },
+      headStyles: { fillColor: GREEN, textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [246, 241, 226] },
+      columnStyles: { 1: { halign: "right" } },
+    });
+  }
+
+  drawFooter(doc);
+  return doc;
+}
+
+/* ---------------- Milk Production Report PDF ---------------- */
+export async function buildMilkReportPdf(farmSettings, { from, to, totalMilk, byAnimal }) {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const logo = await loadLogoDataUrl();
+  drawHeader(doc, farmSettings, "Milk Production Report", logo);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10.5);
+  doc.setTextColor(20, 30, 20);
+  doc.text(`Period: ${fmtDate(from)} to ${fmtDate(to)}`, 12, 53);
+
+  doc.setFillColor(...GREEN);
+  doc.roundedRect(12, 58, 60, 20, 3, 3, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(8);
+  doc.text("TOTAL MILK PRODUCED", 16, 65);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(15);
+  doc.text(fmtLiters(totalMilk), 16, 73);
+
+  autoTable(doc, {
+    startY: 86,
+    head: [["Animal", "Code", "Total Produced", "Avg / Day"]],
+    body: byAnimal.map((a) => [a.name, a.code, fmtLiters(a.total), fmtLiters(a.avg)]),
+    styles: { fontSize: 9, cellPadding: 3 },
+    headStyles: { fillColor: GREEN, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [246, 241, 226] },
+    columnStyles: { 2: { halign: "right" }, 3: { halign: "right" } },
+  });
+
+  drawFooter(doc);
+  return doc;
+}
+
+/* ---------------- Supplier Statement PDF ---------------- */
+export async function buildSupplierStatementPdf(farmSettings, supplierName, purchases) {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const logo = await loadLogoDataUrl();
+  drawHeader(doc, farmSettings, "Supplier Statement", logo);
+
+  const totalPurchased = purchases.reduce((s, p) => s + p.total, 0);
+  const totalPaid = purchases.reduce((s, p) => s + p.paid, 0);
+  const totalCredit = purchases.reduce((s, p) => s + p.credit, 0);
+
+  doc.setTextColor(20, 30, 20);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.text(supplierName, 12, 54);
+
+  const boxes = [
+    { label: "Total Purchased", value: fmtMoney(totalPurchased) },
+    { label: "Total Paid", value: fmtMoney(totalPaid) },
+    { label: "Credit Remaining", value: fmtMoney(totalCredit), danger: totalCredit > 0 },
+  ];
+  const boxW = 58, boxH = 18, startX = 12, y = 62;
+  boxes.forEach((b, i) => {
+    const x = startX + i * (boxW + 2);
+    doc.setFillColor(b.danger ? 251 : 231, b.danger ? 235 : 239, b.danger ? 214 : 229);
+    doc.roundedRect(x, y, boxW, boxH, 2, 2, "F");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...GRAY);
+    doc.text(b.label, x + 3, y + 6);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10.5);
+    doc.setTextColor(b.danger ? DANGER[0] : GREEN[0], b.danger ? DANGER[1] : GREEN[1], b.danger ? DANGER[2] : GREEN[2]);
+    doc.text(b.value, x + 3, y + 13);
+    doc.setFont("helvetica", "normal");
+  });
+
+  autoTable(doc, {
+    startY: 86,
+    head: [["Date", "Product", "Qty", "Total", "Paid", "Credit"]],
+    body: purchases.length
+      ? purchases.map((p) => [fmtDate(p.date), p.product, `${p.quantity} ${p.unit}`, fmtMoney(p.total), fmtMoney(p.paid), fmtMoney(p.credit)])
+      : [["—", "No purchases in this period", "—", "—", "—", "—"]],
+    styles: { fontSize: 8.5, cellPadding: 2.5 },
+    headStyles: { fillColor: GREEN, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [246, 241, 226] },
+    columnStyles: { 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
   });
 
   drawFooter(doc);

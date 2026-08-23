@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient.js";
 import * as offline from "./offline.js";
 import {
@@ -632,7 +633,13 @@ function Sheet({ title, onClose, children, footer }) {
     setClosing(true);
     setTimeout(onClose, 180);
   };
-  return (
+  // Rendered via a portal straight into <body> so it always covers the
+  // full viewport — if it stayed inside the normal component tree, any
+  // ancestor with a CSS transform (like the page-enter animation on
+  // Screen) would turn this "fixed" overlay into being positioned
+  // relative to that ancestor instead of the real screen, which is what
+  // was cutting sheets off / showing them in the wrong place.
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-end justify-center">
       <div
         className={closing ? "" : "animate-backdrop-in"}
@@ -655,7 +662,8 @@ function Sheet({ title, onClose, children, footer }) {
         <div className="overflow-y-auto px-5 py-4">{children}</div>
         {footer && <div className="px-5 py-3" style={{ borderTop: `1px solid ${C.line}` }}>{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1432,7 +1440,7 @@ function MilkScreen({ data, update, notify }) {
   return (
     <Screen>
       <TopBar title="Milk Production" subtitle={`${data.settings.morningTime} morning · ${data.settings.eveningTime} evening`} />
-      <Chips options={["bulk", "log"].map((v) => (v === "bulk" ? "Bulk Entry" : "Production Log"))} value={view === "bulk" ? "Bulk Entry" : "Production Log"} onChange={(v) => setView(v === "Bulk Entry" ? "bulk" : "log")} />
+      <Chips options={["Bulk Entry", "Production Log", "Report"]} value={view === "bulk" ? "Bulk Entry" : view === "log" ? "Production Log" : "Report"} onChange={(v) => setView(v === "Bulk Entry" ? "bulk" : v === "Production Log" ? "log" : "report")} />
 
       {view === "bulk" && (
         <>
@@ -1513,7 +1521,111 @@ function MilkScreen({ data, update, notify }) {
           })}
         </div>
       )}
+
+      {view === "report" && <MilkReportView data={data} notify={notify} />}
     </Screen>
+  );
+}
+
+function MilkReportView({ data, notify }) {
+  const [from, setFrom] = useState(daysAgo(6));
+  const [to, setTo] = useState(today());
+  const [downloading, setDownloading] = useState(false);
+  const rangeValid = from && to && from <= to;
+
+  const records = rangeValid ? data.milk.filter((m) => m.date >= from && m.date <= to) : [];
+  const totalMilk = records.reduce((s, m) => s + m.quantity, 0);
+
+  const byAnimal = data.animals.map((a) => {
+    const recs = records.filter((m) => m.animalId === a.id);
+    const total = recs.reduce((s, m) => s + m.quantity, 0);
+    const days = new Set(recs.map((r) => r.date)).size;
+    return { id: a.id, name: a.name, code: a.code, total, avg: days ? total / days : 0 };
+  }).filter((a) => a.total > 0).sort((a, b) => b.total - a.total);
+
+  const chartData = rangeValid ? (() => {
+    const days = [];
+    let cur = new Date(from);
+    const end = new Date(to);
+    while (cur <= end && days.length < 62) {
+      const dStr = cur.toISOString().slice(0, 10);
+      const dayTotal = data.milk.filter((m) => m.date === dStr).reduce((s, m) => s + m.quantity, 0);
+      days.push({ day: cur.toLocaleDateString("en-GB", { day: "numeric", month: "short" }), milk: Math.round(dayTotal) });
+      cur.setDate(cur.getDate() + 1);
+    }
+    return days;
+  })() : [];
+
+  const downloadReport = async () => {
+    setDownloading(true);
+    try {
+      const { buildMilkReportPdf } = await import("./pdf.js");
+      const doc = await buildMilkReportPdf(data.settings, { from, to, totalMilk, byAnimal });
+      doc.save(`${data.settings.farmName.replace(/\s+/g, "-")}-milk-report-${from}-to-${to}.pdf`);
+      notify("Report downloaded");
+    } catch (e) {
+      notify("Could not generate report");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        <Field label="From">
+          <input type="date" max={to || today()} className={inputCls} style={inputStyle} value={from} onChange={(e) => setFrom(e.target.value)} />
+        </Field>
+        <Field label="To">
+          <input type="date" max={today()} min={from} className={inputCls} style={inputStyle} value={to} onChange={(e) => setTo(e.target.value)} />
+        </Field>
+      </div>
+      {!rangeValid && <p className="text-xs mb-3" style={{ color: C.danger }}>Please choose a valid date range.</p>}
+
+      <div className="rounded-[22px] p-5 mb-4 relative overflow-hidden" style={{ background: C.green }}>
+        <p className="relative text-white/75 text-xs font-bold tracking-[0.12em] mb-2">TOTAL MILK PRODUCED</p>
+        <p className="font-display text-[28px] font-bold text-white leading-none">{fmtL(totalMilk)}</p>
+        <p className="text-white/65 text-[11px] mt-2">{fmtDate(from)} – {fmtDate(to)}</p>
+      </div>
+
+      <Btn full variant="outline" onClick={downloadReport} className="mb-4" disabled={!rangeValid || downloading}>
+        <Download size={16} /> {downloading ? "Generating PDF…" : "Download Milk Report PDF"}
+      </Btn>
+
+      {chartData.length > 0 && (
+        <Card className="p-4 mb-4">
+          <p className="text-xs font-semibold mb-3" style={{ color: C.gray }}>DAILY PRODUCTION</p>
+          <div style={{ width: "100%", height: 140 }}>
+            <ResponsiveContainer>
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke={C.line} vertical={false} />
+                <XAxis dataKey="day" tick={{ fontSize: 9, fill: C.gray }} axisLine={false} tickLine={false} interval={chartData.length > 10 ? Math.ceil(chartData.length / 8) : 0} />
+                <YAxis tick={{ fontSize: 10, fill: C.gray }} axisLine={false} tickLine={false} width={26} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} />
+                <Bar dataKey="milk" fill={C.green} radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </Card>
+      )}
+
+      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>BY ANIMAL</p>
+      {byAnimal.length === 0 ? (
+        <p className="text-xs" style={{ color: C.grayLight }}>No production recorded in this period.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {byAnimal.map((a) => (
+            <Card key={a.id} className="flex items-center justify-between !py-3">
+              <div>
+                <p className="text-sm font-semibold" style={{ color: C.text }}>{a.name} <span style={{ color: C.grayLight }}>· {a.code}</span></p>
+                <p className="text-[11px]" style={{ color: C.gray }}>Avg {fmtL(a.avg)}/day</p>
+              </div>
+              <span className="font-display font-bold text-sm" style={{ color: C.green }}>{fmtL(a.total)}</span>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2013,30 +2125,46 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
   const monthName = new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   const message = `Dear ${customer.name}, your ${monthName} milk bill from ${data.settings.farmName} is ${fmt(monthBill)}. You have paid ${fmt(monthPaid)}. Total credit remaining is ${fmt(customer.balance)}.`;
   const [busy, setBusy] = useState(false);
+  const [period, setPeriod] = useState("all"); // all | range
+  const [from, setFrom] = useState(daysAgo(30));
+  const [to, setTo] = useState(today());
+  const rangeValid = from && to && from <= to;
+
+  const filteredSales = period === "all" ? allSales : allSales.filter((s) => s.date >= from && s.date <= to);
+  const filteredPayments = period === "all" ? allPayments : allPayments.filter((p) => p.date >= from && p.date <= to);
+  const rangeMilk = filteredSales.reduce((s, x) => s + x.quantity, 0);
+  const rangeBilled = filteredSales.reduce((s, x) => s + x.total, 0);
+  const rangeReceived = filteredPayments.reduce((s, p) => s + p.amount, 0);
 
   const buildPdf = async () => {
     const { buildCustomerStatementPdf } = await import("./pdf.js");
-    return buildCustomerStatementPdf(data.settings, customer, allSales, allPayments);
+    return buildCustomerStatementPdf(data.settings, customer, filteredSales, filteredPayments);
   };
 
   const downloadPdf = async () => {
+    if (period === "range" && !rangeValid) return;
     setBusy(true);
     try {
       const doc = await buildPdf();
-      doc.save(`${customer.name.replace(/\s+/g, "-")}-statement.pdf`);
+      const filename = period === "all"
+        ? `${customer.name.replace(/\s+/g, "-")}-statement.pdf`
+        : `${customer.name.replace(/\s+/g, "-")}-statement-${from}-to-${to}.pdf`;
+      doc.save(filename);
     } finally { setBusy(false); }
   };
 
   const shareWhatsApp = async () => {
+    if (period === "range" && !rangeValid) return;
     setBusy(true);
     try {
       const doc = await buildPdf();
       const blob = doc.output("blob");
-      const file = new File([blob], `${customer.name.replace(/\s+/g, "-")}-statement.pdf`, { type: "application/pdf" });
+      const filename = period === "all" ? `${customer.name.replace(/\s+/g, "-")}-statement.pdf` : `${customer.name.replace(/\s+/g, "-")}-statement-${from}-to-${to}.pdf`;
+      const file = new File([blob], filename, { type: "application/pdf" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
         await navigator.share({ files: [file], title: "Milk Bill", text: message });
       } else {
-        doc.save(`${customer.name.replace(/\s+/g, "-")}-statement.pdf`);
+        doc.save(filename);
         const phone = (customer.phone || "").replace(/\D/g, "");
         const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message + " (PDF statement downloaded — attach it here.)")}`;
         window.open(waUrl, "_blank");
@@ -2049,10 +2177,23 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
   return (
     <Sheet title="Customer Statement" onClose={onClose} footer={
       <div className="flex gap-2">
-        <Btn variant="outline" full onClick={downloadPdf} disabled={busy}><Download size={15} /> Download PDF</Btn>
-        <Btn full onClick={shareWhatsApp} disabled={busy}><Share2 size={15} /> Share on WhatsApp</Btn>
+        <Btn variant="outline" full onClick={downloadPdf} disabled={busy || (period === "range" && !rangeValid)}><Download size={15} /> Download PDF</Btn>
+        <Btn full onClick={shareWhatsApp} disabled={busy || (period === "range" && !rangeValid)}><Share2 size={15} /> Share on WhatsApp</Btn>
       </div>
     }>
+      <Chips options={["All Time", "Custom Range"]} value={period === "all" ? "All Time" : "Custom Range"} onChange={(v) => setPeriod(v === "All Time" ? "all" : "range")} />
+      {period === "range" && (
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <Field label="From">
+            <input type="date" max={to || today()} className={inputCls} style={inputStyle} value={from} onChange={(e) => setFrom(e.target.value)} />
+          </Field>
+          <Field label="To">
+            <input type="date" max={today()} min={from} className={inputCls} style={inputStyle} value={to} onChange={(e) => setTo(e.target.value)} />
+          </Field>
+        </div>
+      )}
+      {period === "range" && !rangeValid && <p className="text-xs mb-3" style={{ color: C.danger }}>Please choose a valid date range.</p>}
+
       <div className="rounded-2xl p-4 mb-3" style={{ border: `1.5px dashed ${C.line}` }}>
         <div className="flex items-center gap-2 mb-3">
           <Logo size={34} />
@@ -2063,15 +2204,27 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
         </div>
         <Row label="Customer" value={customer.name} />
         <Row label="Phone" value={customer.phone} />
-        <Row label="This Month's Milk" value={fmtL(monthMilk)} />
-        <Row label="This Month's Bill" value={fmt(monthBill)} />
-        <Row label="This Month's Paid" value={fmt(monthPaid)} />
+        {period === "all" ? (
+          <>
+            <Row label="This Month's Milk" value={fmtL(monthMilk)} />
+            <Row label="This Month's Bill" value={fmt(monthBill)} />
+            <Row label="This Month's Paid" value={fmt(monthPaid)} />
+          </>
+        ) : (
+          <>
+            <Row label="Milk in Period" value={fmtL(rangeMilk)} />
+            <Row label="Billed in Period" value={fmt(rangeBilled)} />
+            <Row label="Received in Period" value={fmt(rangeReceived)} />
+          </>
+        )}
         <Row label="Total Credit Remaining" value={fmt(customer.balance)} bold tone={customer.balance > 0 ? "warn" : "green"} />
         <div className="mt-2">
           <Badge tone={customer.balance > 0 ? "warn" : "green"}>{customer.balance > 0 ? "Credit Due" : "Settled"}</Badge>
         </div>
       </div>
-      <p className="text-[11px] mb-2" style={{ color: C.gray }}>The PDF includes the complete transaction history — every sale and payment with a running balance, not just this month.</p>
+      <p className="text-[11px] mb-2" style={{ color: C.gray }}>
+        {period === "all" ? "The PDF includes the complete transaction history — every sale and payment with a running balance." : "The PDF includes every sale and payment within the selected dates, with a running balance."}
+      </p>
       <p className="text-xs italic" style={{ color: C.gray }}>{message}</p>
     </Sheet>
   );
@@ -2933,6 +3086,32 @@ function ReportsScreen({ data, setData, onBack, notify }) {
       })
     : (rangeTotals ? rangeTotals.days : []);
 
+  const periodFrom = mode === "day" ? date : from;
+  const periodTo = mode === "day" ? date : to;
+
+  const customerPayments = Object.values(
+    data.custPayments
+      .filter((p) => p.date >= periodFrom && p.date <= periodTo)
+      .reduce((acc, p) => {
+        const c = data.customers.find((x) => x.id === p.customerId);
+        const name = c ? c.name : "Unknown";
+        if (!acc[name]) acc[name] = { name, amount: 0 };
+        acc[name].amount += p.amount;
+        return acc;
+      }, {})
+  ).sort((a, b) => b.amount - a.amount);
+
+  const supplierPayments = Object.values(
+    data.purchases
+      .filter((p) => p.date >= periodFrom && p.date <= periodTo && p.paid > 0)
+      .reduce((acc, p) => {
+        const name = p.supplier || "Unknown";
+        if (!acc[name]) acc[name] = { name, amount: 0 };
+        acc[name].amount += p.paid;
+        return acc;
+      }, {})
+  ).sort((a, b) => b.amount - a.amount);
+
   const closeDay = async () => {
     if (alreadyClosed) return;
     try {
@@ -2949,7 +3128,7 @@ function ReportsScreen({ data, setData, onBack, notify }) {
     setDownloading(true);
     try {
       const { buildProfitLossPdf } = await import("./pdf.js");
-      const doc = await buildProfitLossPdf(data.settings, { mode, date, from, to, totals: t });
+      const doc = await buildProfitLossPdf(data.settings, { mode, date, from, to, totals: t, customerPayments, supplierPayments });
       const filename = mode === "day"
         ? `${data.settings.farmName.replace(/\s+/g, "-")}-PL-report-${date}.pdf`
         : `${data.settings.farmName.replace(/\s+/g, "-")}-PL-report-${from}-to-${to}.pdf`;
@@ -3004,6 +3183,24 @@ function ReportsScreen({ data, setData, onBack, notify }) {
         <Row label="Supplier Payments" value={fmt(t.paymentsMade)} />
         <Row label="Net Profit" value={fmt(t.profit)} bold tone={t.profit >= 0 ? "green" : "warn"} />
       </Card>
+
+      {customerPayments.length > 0 && (
+        <Card className="mb-4">
+          <p className="text-xs font-semibold mb-3" style={{ color: C.gray }}>PAYMENTS RECEIVED &middot; BY CUSTOMER</p>
+          {customerPayments.map((c) => (
+            <Row key={c.name} label={c.name} value={fmt(c.amount)} />
+          ))}
+        </Card>
+      )}
+
+      {supplierPayments.length > 0 && (
+        <Card className="mb-4">
+          <p className="text-xs font-semibold mb-3" style={{ color: C.gray }}>PAYMENTS MADE &middot; BY SUPPLIER</p>
+          {supplierPayments.map((s) => (
+            <Row key={s.name} label={s.name} value={fmt(s.amount)} />
+          ))}
+        </Card>
+      )}
 
       <Btn full variant="outline" onClick={downloadReport} className="mb-4" disabled={(mode === "range" && !rangeValid) || downloading}><Download size={16} /> {downloading ? "Generating PDF…" : "Download Profit & Loss PDF"}</Btn>
 
