@@ -1265,10 +1265,10 @@ function Dashboard({ data, role, setModal, goMore }) {
         <>
           <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>FINANCIAL OVERVIEW</p>
           <div className="grid grid-cols-2 gap-2.5 mb-5">
-            <FinCard icon={<Wallet size={16} />} label="Expenses" value={fmt(t.dayExpenses)} tone="warn" />
-            <FinCard icon={<Users size={16} />} label="Customer Due" value={fmt(custOutstanding)} tone="warn" />
-            <FinCard icon={<Truck size={16} />} label="Supplier Due" value={fmt(supplierBalance)} tone="warn" />
-            <FinCard icon={<Package size={16} />} label="Stock Value" value={fmt(stockValue)} tone="green" />
+            <FinCard icon={<Wallet size={13} />} label="Expenses" value={fmt(t.dayExpenses)} tone="warn" />
+            <FinCard icon={<Users size={13} />} label="Customer Due" value={fmt(custOutstanding)} tone="warn" />
+            <FinCard icon={<Truck size={13} />} label="Supplier Due" value={fmt(supplierBalance)} tone="warn" />
+            <FinCard icon={<Package size={13} />} label="Stock Value" value={fmt(stockValue)} tone="green" />
           </div>
         </>
       )}
@@ -1325,10 +1325,12 @@ function FinCard({ icon, label, value, tone = "text" }) {
   const colorMap = { text: C.text, warn: C.warn, danger: C.danger, green: C.green };
   const iconTone = { text: { bg: C.greenPale, fg: C.green }, warn: { bg: "#FBEBD6", fg: C.warn }, danger: { bg: "#F6DEDB", fg: C.danger }, green: { bg: C.greenPale, fg: C.green } }[tone];
   return (
-    <div className="rounded-2xl bg-white p-3.5 press" style={{ border: `1px solid ${C.line}`, boxShadow: "0 1px 2px rgba(31,77,44,0.05)" }}>
-      <div className="w-9 h-9 rounded-full flex items-center justify-center mb-2.5" style={{ background: iconTone.bg, color: iconTone.fg }}>{icon}</div>
-      <p className="text-xs font-semibold mb-1" style={{ color: C.gray }}>{label}</p>
-      <p className="font-display text-base font-bold" style={{ color: colorMap[tone] }}>{value}</p>
+    <div className="rounded-2xl bg-white p-2.5 press" style={{ border: `1px solid ${C.line}`, boxShadow: "0 1px 2px rgba(31,77,44,0.05)" }}>
+      <div className="flex items-center gap-2">
+        <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0" style={{ background: iconTone.bg, color: iconTone.fg }}>{icon}</div>
+        <p className="text-[10.5px] font-semibold" style={{ color: C.gray }}>{label}</p>
+      </div>
+      <p className="font-display text-sm font-bold mt-1.5" style={{ color: colorMap[tone] }}>{value}</p>
     </div>
   );
 }
