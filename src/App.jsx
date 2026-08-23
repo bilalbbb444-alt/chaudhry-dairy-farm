@@ -1184,6 +1184,7 @@ function Dashboard({ data, role, setModal, goMore }) {
   const stockValue = data.inventory.reduce((s, i) => s + i.currentStock * i.avgCost, 0);
   const activeAnimals = data.animals.filter((a) => !["Sold", "Deceased"].includes(a.status)).length;
   const isEmployee = role === "Employee";
+  const [showNotifications, setShowNotifications] = useState(false);
 
   const lowStock = data.inventory.filter((i) => i.currentStock <= i.minimumStock);
   const overdueCustomers = data.customers.filter((c) => c.balance > c.creditLimit);
@@ -1192,8 +1193,24 @@ function Dashboard({ data, role, setModal, goMore }) {
     return paid < e.salary;
   });
   const vaccinationsDue = data.vaccinations.filter((v) => v.nextDueDate && v.nextDueDate <= daysAgo(-7));
+  const sickAnimals = data.animals.filter((a) => a.status === "Sick");
 
-  const totalAlerts = lowStock.length + (isEmployee ? 0 : overdueCustomers.length + (salaryDue.length > 0 ? 1 : 0)) + (data.animals.some((a) => a.status === "Sick") ? 1 : 0) + (vaccinationsDue.length > 0 ? 1 : 0);
+  // Built once, shared between the inline Smart Alerts list and the notification bell sheet.
+  const alerts = [
+    ...lowStock.map((i) => ({ key: `stock-${i.id}`, title: `${i.name} stock is low`, detail: `Current: ${i.currentStock} ${i.unit} · Minimum: ${i.minimumStock} ${i.unit}`, onClick: () => goMore("inventory") })),
+    ...(!isEmployee ? overdueCustomers.map((c) => ({ key: `cust-${c.id}`, title: `${c.name} exceeded credit limit`, detail: `Balance ${fmt(c.balance)} of limit ${fmt(c.creditLimit)}`, onClick: () => {} })) : []),
+    ...(!isEmployee && salaryDue.length > 0 ? [{ key: "salary", title: `Salary due for ${salaryDue.length} employee(s)`, detail: salaryDue.map((e) => e.name).join(", "), onClick: () => goMore("employees") }] : []),
+    ...(sickAnimals.length > 0 ? [{ key: "sick", title: "Animal under treatment", detail: sickAnimals.map((a) => `${a.name} (${a.code})`).join(", "), onClick: () => goMore("animals") }] : []),
+    ...(vaccinationsDue.length > 0 ? [{
+      key: "vacc",
+      title: `Vaccination due/overdue for ${vaccinationsDue.length} animal(s)`,
+      detail: vaccinationsDue.map((v) => {
+        const a = data.animals.find((x) => x.id === v.animalId);
+        return `${a ? a.name : "Unknown"} — ${v.vaccine} (${fmtDate(v.nextDueDate)})`;
+      }).join(", "),
+      onClick: () => goMore("animals"),
+    }] : []),
+  ];
 
   return (
     <Screen>
@@ -1204,54 +1221,54 @@ function Dashboard({ data, role, setModal, goMore }) {
           <h1 className="font-display text-lg font-bold" style={{ color: C.text }}>{data.settings.farmName}</h1>
         </div>
         <div className="flex items-center gap-2.5">
-          <button className="w-9 h-9 rounded-full flex items-center justify-center relative tap" style={{ background: C.white, border: `1px solid ${C.line}` }}>
+          <button onClick={() => setShowNotifications(true)} className="w-9 h-9 rounded-full flex items-center justify-center relative tap" style={{ background: C.white, border: `1px solid ${C.line}` }}>
             <Bell size={16} color={C.text} />
-            {totalAlerts > 0 && <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full" style={{ background: C.danger }} />}
+            {alerts.length > 0 && <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full" style={{ background: C.danger }} />}
           </button>
           <Logo size={38} />
         </div>
       </div>
 
       {/* signature hero card — calm solid green, faint wave, restrained */}
-      <div className="rounded-[22px] p-4 mb-4 relative overflow-hidden" style={{ background: C.green }}>
-        <svg className="absolute inset-x-0 bottom-0 w-full opacity-[0.08]" height="60" viewBox="0 0 375 60" preserveAspectRatio="none">
-          <path d="M0 38 C 70 20, 120 50, 190 32 S 310 15, 375 38 V60 H0 Z" fill="#fff" />
+      <div className="rounded-[22px] p-5 mb-4 relative overflow-hidden" style={{ background: C.green }}>
+        <svg className="absolute inset-x-0 bottom-0 w-full opacity-[0.08]" height="70" viewBox="0 0 375 70" preserveAspectRatio="none">
+          <path d="M0 44 C 70 22, 120 58, 190 38 S 310 18, 375 44 V70 H0 Z" fill="#fff" />
         </svg>
-        <p className="relative text-white/75 text-[10.5px] font-bold tracking-[0.12em] mb-3">TODAY'S FARM PERFORMANCE</p>
+        <p className="relative text-white/75 text-xs font-bold tracking-[0.12em] mb-4">TODAY'S FARM PERFORMANCE</p>
         <div className="relative flex items-center">
           <div className="flex-1">
-            <p className="font-display text-xl font-bold text-white leading-none">{fmtL(t.milkProduced)}</p>
-            <p className="text-white/65 text-[10px] mt-1.5">Milk Produced</p>
+            <p className="font-display text-[28px] font-bold text-white leading-none">{fmtL(t.milkProduced)}</p>
+            <p className="text-white/70 text-xs mt-2">Milk Produced</p>
           </div>
           {!isEmployee ? (
             <>
               <div className="flex-1">
-                <p className="font-display text-xl font-bold leading-none" style={{ color: "#E9C765" }}>{fmt(t.salesTotal)}</p>
-                <p className="text-white/65 text-[10px] mt-1.5">Revenue</p>
+                <p className="font-display text-[28px] font-bold leading-none" style={{ color: "#E9C765" }}>{fmt(t.salesTotal)}</p>
+                <p className="text-white/70 text-xs mt-2">Revenue</p>
               </div>
               <div className="flex-1">
-                <p className="font-display text-xl font-bold text-white leading-none">{fmt(t.profit)}</p>
-                <p className="text-white/65 text-[10px] mt-1.5">Net Profit</p>
+                <p className="font-display text-[28px] font-bold text-white leading-none">{fmt(t.profit)}</p>
+                <p className="text-white/70 text-xs mt-2">Net Profit</p>
               </div>
             </>
           ) : (
             <div className="flex-1">
-              <p className="font-display text-xl font-bold text-white leading-none">{fmtL(t.milkSold)}</p>
-              <p className="text-white/65 text-[10px] mt-1.5">Milk Sold</p>
+              <p className="font-display text-[28px] font-bold text-white leading-none">{fmtL(t.milkSold)}</p>
+              <p className="text-white/70 text-xs mt-2">Milk Sold</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* financial overview — horizontal scroll, hidden for Employee */}
+      {/* financial overview — larger grid cards, matching Quick Actions sizing, hidden for Employee */}
       {!isEmployee && (
         <>
           <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>FINANCIAL OVERVIEW</p>
-          <div className="flex gap-2 overflow-x-auto pb-1 mb-4" style={{ scrollbarWidth: "none" }}>
-            <FinCard label="Expenses" value={fmt(t.dayExpenses)} tone="warn" />
-            <FinCard label="Customer Due" value={fmt(custOutstanding)} tone="warn" />
-            <FinCard label="Supplier Due" value={fmt(supplierBalance)} tone="warn" />
-            <FinCard label="Stock Value" value={fmt(stockValue)} />
+          <div className="grid grid-cols-2 gap-2.5 mb-5">
+            <FinCard icon={<Wallet size={16} />} label="Expenses" value={fmt(t.dayExpenses)} tone="warn" />
+            <FinCard icon={<Users size={16} />} label="Customer Due" value={fmt(custOutstanding)} tone="warn" />
+            <FinCard icon={<Truck size={16} />} label="Supplier Due" value={fmt(supplierBalance)} tone="warn" />
+            <FinCard icon={<Package size={16} />} label="Stock Value" value={fmt(stockValue)} tone="green" />
           </div>
         </>
       )}
@@ -1275,42 +1292,43 @@ function Dashboard({ data, role, setModal, goMore }) {
 
       <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>SMART ALERTS</p>
       <div className="flex flex-col gap-2">
-        {lowStock.map((i) => (
-          <AlertRow key={i.id} title={`${i.name} stock is low`} detail={`Current: ${i.currentStock} ${i.unit} · Minimum: ${i.minimumStock} ${i.unit}`} onClick={() => goMore("inventory")} />
+        {alerts.map((a) => (
+          <AlertRow key={a.key} title={a.title} detail={a.detail} onClick={a.onClick} />
         ))}
-        {!isEmployee && overdueCustomers.map((c) => (
-          <AlertRow key={c.id} title={`${c.name} exceeded credit limit`} detail={`Balance ${fmt(c.balance)} of limit ${fmt(c.creditLimit)}`} onClick={() => {}} />
-        ))}
-        {!isEmployee && salaryDue.length > 0 && (
-          <AlertRow title={`Salary due for ${salaryDue.length} employee(s)`} detail={salaryDue.map((e) => e.name).join(", ")} onClick={() => goMore("employees")} />
-        )}
-        {data.animals.some((a) => a.status === "Sick") && (
-          <AlertRow title="Animal under treatment" detail={data.animals.filter((a) => a.status === "Sick").map((a) => `${a.name} (${a.code})`).join(", ")} onClick={() => goMore("animals")} />
-        )}
-        {vaccinationsDue.length > 0 && (
-          <AlertRow
-            title={`Vaccination due/overdue for ${vaccinationsDue.length} animal(s)`}
-            detail={vaccinationsDue.map((v) => {
-              const a = data.animals.find((x) => x.id === v.animalId);
-              return `${a ? a.name : "Unknown"} — ${v.vaccine} (${fmtDate(v.nextDueDate)})`;
-            }).join(", ")}
-            onClick={() => goMore("animals")}
-          />
-        )}
-        {lowStock.length === 0 && overdueCustomers.length === 0 && salaryDue.length === 0 && vaccinationsDue.length === 0 && !data.animals.some((a) => a.status === "Sick") && (
+        {alerts.length === 0 && (
           <p className="text-xs" style={{ color: C.grayLight }}>No alerts right now. Everything looks good.</p>
         )}
       </div>
+
+      {showNotifications && <NotificationsSheet alerts={alerts} onClose={() => setShowNotifications(false)} />}
     </Screen>
   );
 }
 
-function FinCard({ label, value, tone = "text" }) {
-  const colorMap = { text: C.text, warn: C.warn, danger: C.danger, green: C.green };
+function NotificationsSheet({ alerts, onClose }) {
   return (
-    <div className="rounded-2xl px-3.5 py-3 shrink-0" style={{ width: 108, background: C.white, border: `1px solid ${C.line}` }}>
-      <p className="text-[9.5px] font-semibold mb-1.5" style={{ color: C.gray }}>{label}</p>
-      <p className="font-display text-[13px] font-bold" style={{ color: colorMap[tone] }}>{value}</p>
+    <Sheet title="Notifications" onClose={onClose}>
+      {alerts.length === 0 ? (
+        <Empty icon={<Bell size={22} color={C.green} />} title="You're all caught up" note="No alerts right now — check back later." />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {alerts.map((a) => (
+            <AlertRow key={a.key} title={a.title} detail={a.detail} onClick={() => { a.onClick && a.onClick(); onClose(); }} />
+          ))}
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+function FinCard({ icon, label, value, tone = "text" }) {
+  const colorMap = { text: C.text, warn: C.warn, danger: C.danger, green: C.green };
+  const iconTone = { text: { bg: C.greenPale, fg: C.green }, warn: { bg: "#FBEBD6", fg: C.warn }, danger: { bg: "#F6DEDB", fg: C.danger }, green: { bg: C.greenPale, fg: C.green } }[tone];
+  return (
+    <div className="rounded-2xl bg-white p-3.5 press" style={{ border: `1px solid ${C.line}`, boxShadow: "0 1px 2px rgba(31,77,44,0.05)" }}>
+      <div className="w-9 h-9 rounded-full flex items-center justify-center mb-2.5" style={{ background: iconTone.bg, color: iconTone.fg }}>{icon}</div>
+      <p className="text-xs font-semibold mb-1" style={{ color: C.gray }}>{label}</p>
+      <p className="font-display text-base font-bold" style={{ color: colorMap[tone] }}>{value}</p>
     </div>
   );
 }
@@ -3033,6 +3051,7 @@ function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail, ins
   const s = data.settings;
   const patch = (k, v) => setData((d) => ({ ...d, settings: { ...d.settings, [k]: v } }));
   const [copied, setCopied] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const [installing, setInstalling] = useState(false);
 
   const isStandalone = typeof window !== "undefined" && (window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
@@ -3142,8 +3161,13 @@ function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail, ins
         <p className="text-[11px] mb-3" style={{ color: C.gray }}>
           Your data is saved to this account and kept year over year, accessible from any device.
         </p>
-        <Btn variant="outline" full onClick={onSignOut}>Sign Out</Btn>
+        <div className="grid grid-cols-2 gap-2">
+          <Btn variant="ghost" onClick={() => setShowChangePassword(true)}><Lock size={14} /> Change Password</Btn>
+          <Btn variant="outline" onClick={onSignOut}>Sign Out</Btn>
+        </div>
       </Card>
+
+      {showChangePassword && <ChangePasswordSheet onClose={() => setShowChangePassword(false)} />}
 
       <Card className="mb-4">
         <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>TEAM</p>
@@ -3172,6 +3196,51 @@ function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail, ins
         ))}
       </Card>
     </Screen>
+  );
+}
+
+function ChangePasswordSheet({ onClose }) {
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(false);
+
+  const save = async () => {
+    setErr("");
+    if (pw1.length < 6) { setErr("Password must be at least 6 characters."); return; }
+    if (pw1 !== pw2) { setErr("Passwords do not match."); return; }
+    setSaving(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: pw1 });
+      if (error) throw error;
+      setDone(true);
+    } catch (e) {
+      setErr(e.message || "Could not change password.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Sheet title="Change Password" onClose={onClose} footer={!done && <Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : "Save New Password"}</Btn>}>
+      {done ? (
+        <div className="text-center py-4">
+          <div className="mx-auto mb-3 w-12 h-12 rounded-full flex items-center justify-center" style={{ background: C.greenPale }}>
+            <Check size={22} color={C.green} />
+          </div>
+          <p className="text-sm font-semibold" style={{ color: C.text }}>Password updated</p>
+          <p className="text-xs mt-1" style={{ color: C.gray }}>Use your new password next time you sign in.</p>
+          <Btn variant="ghost" className="mt-4" onClick={onClose}>Done</Btn>
+        </div>
+      ) : (
+        <>
+          <Field label="New Password"><input type="password" className={inputCls} style={inputStyle} value={pw1} onChange={(e) => setPw1(e.target.value)} placeholder="At least 6 characters" /></Field>
+          <Field label="Confirm New Password"><input type="password" className={inputCls} style={inputStyle} value={pw2} onChange={(e) => setPw2(e.target.value)} placeholder="Re-enter password" /></Field>
+          {err && <p className="text-xs mb-2" style={{ color: C.danger }}>{err}</p>}
+        </>
+      )}
+    </Sheet>
   );
 }
 
