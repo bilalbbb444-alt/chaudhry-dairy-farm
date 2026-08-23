@@ -2728,7 +2728,20 @@ function InventoryModal({ setData, onClose, notify, item }) {
 /* ---------------------------------------------------------------- */
 function PurchasesScreen({ data, setData, onBack, notify }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [statementSupplier, setStatementSupplier] = useState(null);
   const totalDue = data.purchases.reduce((s, p) => s + p.credit, 0);
+
+  const suppliers = Object.values(
+    data.purchases.reduce((acc, p) => {
+      const name = p.supplier || "Unknown";
+      if (!acc[name]) acc[name] = { name, total: 0, paid: 0, credit: 0, count: 0 };
+      acc[name].total += p.total;
+      acc[name].paid += p.paid;
+      acc[name].credit += p.credit;
+      acc[name].count += 1;
+      return acc;
+    }, {})
+  ).sort((a, b) => b.credit - a.credit || b.total - a.total);
 
   const removePurchase = async (p) => {
     if (!window.confirm("Delete this purchase? Stock added by it will be reversed.")) return;
@@ -2753,6 +2766,26 @@ function PurchasesScreen({ data, setData, onBack, notify }) {
       <TopBar title="Purchases" subtitle={`Supplier balance due ${fmt(totalDue)}`} onBack={onBack} right={
         <button onClick={() => setShowAdd(true)} className="p-2 rounded-full" style={{ background: C.green }}><Plus size={18} color="white" /></button>
       } />
+
+      {suppliers.length > 0 && (
+        <>
+          <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>SUPPLIERS</p>
+          <div className="flex flex-col gap-2 mb-5">
+            {suppliers.map((s) => (
+              <Card key={s.name} className="!py-3">
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-sm font-semibold" style={{ color: C.text }}>{s.name}</p>
+                  <Badge tone={s.credit > 0 ? "warn" : "green"}>{s.credit > 0 ? "CREDIT DUE" : "SETTLED"}</Badge>
+                </div>
+                <p className="text-[11px] mb-2" style={{ color: C.gray }}>{s.count} purchase{s.count === 1 ? "" : "s"} · Paid {fmt(s.paid)} of {fmt(s.total)}</p>
+                <Btn variant="ghost" onClick={() => setStatementSupplier(s.name)}><Download size={14} /> Download Report</Btn>
+              </Card>
+            ))}
+          </div>
+        </>
+      )}
+
+      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>ALL PURCHASES</p>
       {data.purchases.length === 0 ? (
         <Empty icon={<Truck size={22} color={C.green} />} title="No purchases yet" note="Record purchases from suppliers." actionLabel="Add Purchase" onAction={() => setShowAdd(true)} />
       ) : (
@@ -2776,7 +2809,105 @@ function PurchasesScreen({ data, setData, onBack, notify }) {
         </div>
       )}
       {showAdd && <PurchaseModal data={data} setData={setData} onClose={() => setShowAdd(false)} notify={notify} />}
+      {statementSupplier && (
+        <SupplierStatementSheet
+          data={data}
+          supplierName={statementSupplier}
+          purchases={data.purchases.filter((p) => (p.supplier || "Unknown") === statementSupplier)}
+          onClose={() => setStatementSupplier(null)}
+        />
+      )}
     </Screen>
+  );
+}
+
+function SupplierStatementSheet({ data, supplierName, purchases, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [period, setPeriod] = useState("all");
+  const [from, setFrom] = useState(daysAgo(30));
+  const [to, setTo] = useState(today());
+  const rangeValid = from && to && from <= to;
+
+  const filtered = period === "all" ? purchases : purchases.filter((p) => p.date >= from && p.date <= to);
+  const totalPurchased = filtered.reduce((s, p) => s + p.total, 0);
+  const totalPaid = filtered.reduce((s, p) => s + p.paid, 0);
+  const totalCredit = filtered.reduce((s, p) => s + p.credit, 0);
+
+  const buildPdf = async () => {
+    const { buildSupplierStatementPdf } = await import("./pdf.js");
+    return buildSupplierStatementPdf(data.settings, supplierName, filtered);
+  };
+
+  const filename = period === "all"
+    ? `${supplierName.replace(/\s+/g, "-")}-statement.pdf`
+    : `${supplierName.replace(/\s+/g, "-")}-statement-${from}-to-${to}.pdf`;
+
+  const downloadPdf = async () => {
+    if (period === "range" && !rangeValid) return;
+    setBusy(true);
+    try {
+      const doc = await buildPdf();
+      doc.save(filename);
+    } finally { setBusy(false); }
+  };
+
+  const shareWhatsApp = async () => {
+    if (period === "range" && !rangeValid) return;
+    setBusy(true);
+    try {
+      const doc = await buildPdf();
+      const blob = doc.output("blob");
+      const file = new File([blob], filename, { type: "application/pdf" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Supplier Statement" });
+      } else {
+        doc.save(filename);
+      }
+    } catch (e) {
+      // user cancelled share sheet — no-op
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <Sheet title="Supplier Statement" onClose={onClose} footer={
+      <div className="flex gap-2">
+        <Btn variant="outline" full onClick={downloadPdf} disabled={busy || (period === "range" && !rangeValid)}><Download size={15} /> Download PDF</Btn>
+        <Btn full onClick={shareWhatsApp} disabled={busy || (period === "range" && !rangeValid)}><Share2 size={15} /> Share</Btn>
+      </div>
+    }>
+      <Chips options={["All Time", "Custom Range"]} value={period === "all" ? "All Time" : "Custom Range"} onChange={(v) => setPeriod(v === "All Time" ? "all" : "range")} />
+      {period === "range" && (
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          <Field label="From">
+            <input type="date" max={to || today()} className={inputCls} style={inputStyle} value={from} onChange={(e) => setFrom(e.target.value)} />
+          </Field>
+          <Field label="To">
+            <input type="date" max={today()} min={from} className={inputCls} style={inputStyle} value={to} onChange={(e) => setTo(e.target.value)} />
+          </Field>
+        </div>
+      )}
+      {period === "range" && !rangeValid && <p className="text-xs mb-3" style={{ color: C.danger }}>Please choose a valid date range.</p>}
+
+      <div className="rounded-2xl p-4 mb-3" style={{ border: `1.5px dashed ${C.line}` }}>
+        <div className="flex items-center gap-2 mb-3">
+          <Logo size={34} />
+          <div>
+            <p className="font-display font-bold text-sm" style={{ color: C.text }}>{data.settings.farmName}</p>
+            <p className="text-[10px]" style={{ color: C.gray }}>{data.settings.address} · {data.settings.phone}</p>
+          </div>
+        </div>
+        <Row label="Supplier" value={supplierName} />
+        <Row label="Total Purchased" value={fmt(totalPurchased)} />
+        <Row label="Total Paid" value={fmt(totalPaid)} />
+        <Row label="Credit Remaining" value={fmt(totalCredit)} bold tone={totalCredit > 0 ? "warn" : "green"} />
+        <div className="mt-2">
+          <Badge tone={totalCredit > 0 ? "warn" : "green"}>{totalCredit > 0 ? "Credit Due" : "Settled"}</Badge>
+        </div>
+      </div>
+      <p className="text-[11px]" style={{ color: C.gray }}>
+        {period === "all" ? "The PDF lists every purchase from this supplier." : "The PDF lists every purchase from this supplier within the selected dates."}
+      </p>
+    </Sheet>
   );
 }
 
