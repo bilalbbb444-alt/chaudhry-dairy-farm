@@ -5,6 +5,7 @@ const GREEN = [31, 77, 44];
 const GOLD = [199, 154, 46];
 const GRAY = [107, 115, 96];
 const DANGER = [199, 75, 63];
+const WARN = [219, 138, 44];
 
 function fmtMoney(n) {
   return "Rs. " + Math.round(n || 0).toLocaleString("en-US");
@@ -295,6 +296,53 @@ export async function buildSupplierStatementPdf(farmSettings, supplierName, purc
     headStyles: { fillColor: GREEN, textColor: 255, fontStyle: "bold" },
     alternateRowStyles: { fillColor: [246, 241, 226] },
     columnStyles: { 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
+  });
+
+  drawFooter(doc);
+  return doc;
+}
+
+/* ---------------- Monthly Bill PDF (concise, classic format) ---------------- */
+export async function buildMonthlyBillPdf(farmSettings, customer, { monthLabel, milkDelivered, avgPrice, totalBill, paidAmount }) {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const logo = await loadLogoDataUrl();
+  drawHeader(doc, farmSettings, "Monthly Milk Bill", logo);
+
+  doc.setTextColor(20, 30, 20);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text(customer.name, 12, 55);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(...GRAY);
+  doc.text(`${customer.phone || ""}    Billing Month: ${monthLabel}`, 12, 61);
+
+  const remaining = totalBill - paidAmount;
+  const rows = [
+    ["Milk Delivered", fmtLiters(milkDelivered)],
+    ["Average Price per Liter", fmtMoney(avgPrice)],
+    ["Total Bill", fmtMoney(totalBill)],
+    ["Paid Amount", fmtMoney(paidAmount)],
+    ["Remaining", fmtMoney(remaining)],
+  ];
+
+  autoTable(doc, {
+    startY: 70,
+    body: rows,
+    styles: { fontSize: 11, cellPadding: 4 },
+    columnStyles: { 0: { fontStyle: "normal", textColor: GRAY }, 1: { halign: "right", fontStyle: "bold" } },
+    didParseCell: (data) => {
+      if (data.row.index === rows.length - 1) {
+        data.cell.styles.fillColor = remaining > 0 ? [251, 235, 214] : [231, 239, 229];
+        data.cell.styles.textColor = remaining > 0 ? WARN : GREEN;
+        data.cell.styles.fontStyle = "bold";
+        data.cell.styles.fontSize = 12;
+      }
+      if (data.row.index === 2) {
+        data.cell.styles.fillColor = [246, 241, 226];
+        data.cell.styles.fontStyle = "bold";
+      }
+    },
   });
 
   drawFooter(doc);

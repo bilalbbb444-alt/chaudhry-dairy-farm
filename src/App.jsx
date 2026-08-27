@@ -2125,10 +2125,19 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
   const monthName = new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   const message = `Dear ${customer.name}, your ${monthName} milk bill from ${data.settings.farmName} is ${fmt(monthBill)}. You have paid ${fmt(monthPaid)}. Total credit remaining is ${fmt(customer.balance)}.`;
   const [busy, setBusy] = useState(false);
-  const [period, setPeriod] = useState("all"); // all | range
+  const [period, setPeriod] = useState("month"); // month | all | range
+  const [billMonth, setBillMonth] = useState(today().slice(0, 7)); // "YYYY-MM"
   const [from, setFrom] = useState(daysAgo(30));
   const [to, setTo] = useState(today());
   const rangeValid = from && to && from <= to;
+
+  const monthSales = allSales.filter((s) => s.date.startsWith(billMonth));
+  const monthPayments = allPayments.filter((p) => p.date.startsWith(billMonth));
+  const billMonthMilk = monthSales.reduce((s, x) => s + x.quantity, 0);
+  const billMonthTotal = monthSales.reduce((s, x) => s + x.total, 0);
+  const billMonthPaid = monthPayments.reduce((s, p) => s + p.amount, 0);
+  const billMonthAvgPrice = billMonthMilk > 0 ? billMonthTotal / billMonthMilk : customer.defaultPrice;
+  const billMonthLabel = new Date(billMonth + "-01").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
 
   const filteredSales = period === "all" ? allSales : allSales.filter((s) => s.date >= from && s.date <= to);
   const filteredPayments = period === "all" ? allPayments : allPayments.filter((p) => p.date >= from && p.date <= to);
@@ -2137,36 +2146,48 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
   const rangeReceived = filteredPayments.reduce((s, p) => s + p.amount, 0);
 
   const buildPdf = async () => {
+    if (period === "month") {
+      const { buildMonthlyBillPdf } = await import("./pdf.js");
+      return buildMonthlyBillPdf(data.settings, customer, { monthLabel: billMonthLabel, milkDelivered: billMonthMilk, avgPrice: billMonthAvgPrice, totalBill: billMonthTotal, paidAmount: billMonthPaid });
+    }
     const { buildCustomerStatementPdf } = await import("./pdf.js");
     return buildCustomerStatementPdf(data.settings, customer, filteredSales, filteredPayments);
   };
 
+  const filenameFor = () => {
+    if (period === "month") return `${customer.name.replace(/\s+/g, "-")}-bill-${billMonth}.pdf`;
+    if (period === "all") return `${customer.name.replace(/\s+/g, "-")}-statement.pdf`;
+    return `${customer.name.replace(/\s+/g, "-")}-statement-${from}-to-${to}.pdf`;
+  };
+
+  const disabled = busy || (period === "range" && !rangeValid);
+
   const downloadPdf = async () => {
-    if (period === "range" && !rangeValid) return;
+    if (disabled) return;
     setBusy(true);
     try {
       const doc = await buildPdf();
-      const filename = period === "all"
-        ? `${customer.name.replace(/\s+/g, "-")}-statement.pdf`
-        : `${customer.name.replace(/\s+/g, "-")}-statement-${from}-to-${to}.pdf`;
-      doc.save(filename);
+      doc.save(filenameFor());
     } finally { setBusy(false); }
   };
 
   const shareWhatsApp = async () => {
-    if (period === "range" && !rangeValid) return;
+    if (disabled) return;
     setBusy(true);
     try {
       const doc = await buildPdf();
       const blob = doc.output("blob");
-      const filename = period === "all" ? `${customer.name.replace(/\s+/g, "-")}-statement.pdf` : `${customer.name.replace(/\s+/g, "-")}-statement-${from}-to-${to}.pdf`;
+      const filename = filenameFor();
       const file = new File([blob], filename, { type: "application/pdf" });
+      const shareText = period === "month"
+        ? `Dear ${customer.name}, your ${billMonthLabel} milk bill from ${data.settings.farmName} is ${fmt(billMonthTotal)}. You have paid ${fmt(billMonthPaid)}. Remaining is ${fmt(billMonthTotal - billMonthPaid)}.`
+        : message;
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], title: "Milk Bill", text: message });
+        await navigator.share({ files: [file], title: "Milk Bill", text: shareText });
       } else {
         doc.save(filename);
         const phone = (customer.phone || "").replace(/\D/g, "");
-        const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(message + " (PDF statement downloaded — attach it here.)")}`;
+        const waUrl = `https://wa.me/${phone}?text=${encodeURIComponent(shareText + " (PDF bill downloaded — attach it here.)")}`;
         window.open(waUrl, "_blank");
       }
     } catch (e) {
@@ -2175,13 +2196,19 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
   };
 
   return (
-    <Sheet title="Customer Statement" onClose={onClose} footer={
+    <Sheet title="Customer Bill / Statement" onClose={onClose} footer={
       <div className="flex gap-2">
-        <Btn variant="outline" full onClick={downloadPdf} disabled={busy || (period === "range" && !rangeValid)}><Download size={15} /> Download PDF</Btn>
-        <Btn full onClick={shareWhatsApp} disabled={busy || (period === "range" && !rangeValid)}><Share2 size={15} /> Share on WhatsApp</Btn>
+        <Btn variant="outline" full onClick={downloadPdf} disabled={disabled}><Download size={15} /> Download PDF</Btn>
+        <Btn full onClick={shareWhatsApp} disabled={disabled}><Share2 size={15} /> Share on WhatsApp</Btn>
       </div>
     }>
-      <Chips options={["All Time", "Custom Range"]} value={period === "all" ? "All Time" : "Custom Range"} onChange={(v) => setPeriod(v === "All Time" ? "all" : "range")} />
+      <Chips options={["Monthly Bill", "All Time", "Custom Range"]} value={period === "month" ? "Monthly Bill" : period === "all" ? "All Time" : "Custom Range"} onChange={(v) => setPeriod(v === "Monthly Bill" ? "month" : v === "All Time" ? "all" : "range")} />
+
+      {period === "month" && (
+        <Field label="Billing Month">
+          <input type="month" max={today().slice(0, 7)} className={inputCls} style={inputStyle} value={billMonth} onChange={(e) => setBillMonth(e.target.value)} />
+        </Field>
+      )}
       {period === "range" && (
         <div className="grid grid-cols-2 gap-3 mb-3">
           <Field label="From">
@@ -2204,26 +2231,40 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
         </div>
         <Row label="Customer" value={customer.name} />
         <Row label="Phone" value={customer.phone} />
-        {period === "all" ? (
+        {period === "month" && (
+          <>
+            <Row label={`${billMonthLabel} Milk`} value={fmtL(billMonthMilk)} />
+            <Row label="Total Bill" value={fmt(billMonthTotal)} />
+            <Row label="Paid" value={fmt(billMonthPaid)} />
+            <Row label="Remaining" value={fmt(billMonthTotal - billMonthPaid)} bold tone={billMonthTotal - billMonthPaid > 0 ? "warn" : "green"} />
+          </>
+        )}
+        {period === "all" && (
           <>
             <Row label="This Month's Milk" value={fmtL(monthMilk)} />
             <Row label="This Month's Bill" value={fmt(monthBill)} />
             <Row label="This Month's Paid" value={fmt(monthPaid)} />
+            <Row label="Total Credit Remaining" value={fmt(customer.balance)} bold tone={customer.balance > 0 ? "warn" : "green"} />
           </>
-        ) : (
+        )}
+        {period === "range" && (
           <>
             <Row label="Milk in Period" value={fmtL(rangeMilk)} />
             <Row label="Billed in Period" value={fmt(rangeBilled)} />
             <Row label="Received in Period" value={fmt(rangeReceived)} />
+            <Row label="Total Credit Remaining" value={fmt(customer.balance)} bold tone={customer.balance > 0 ? "warn" : "green"} />
           </>
         )}
-        <Row label="Total Credit Remaining" value={fmt(customer.balance)} bold tone={customer.balance > 0 ? "warn" : "green"} />
-        <div className="mt-2">
-          <Badge tone={customer.balance > 0 ? "warn" : "green"}>{customer.balance > 0 ? "Credit Due" : "Settled"}</Badge>
-        </div>
+        {period !== "month" && (
+          <div className="mt-2">
+            <Badge tone={customer.balance > 0 ? "warn" : "green"}>{customer.balance > 0 ? "Credit Due" : "Settled"}</Badge>
+          </div>
+        )}
       </div>
       <p className="text-[11px] mb-2" style={{ color: C.gray }}>
-        {period === "all" ? "The PDF includes the complete transaction history — every sale and payment with a running balance." : "The PDF includes every sale and payment within the selected dates, with a running balance."}
+        {period === "month" && "A concise monthly bill for the selected calendar month — milk delivered, total, paid, and remaining."}
+        {period === "all" && "The PDF includes the complete transaction history — every sale and payment with a running balance."}
+        {period === "range" && "The PDF includes every sale and payment within the selected dates, with a running balance."}
       </p>
       <p className="text-xs italic" style={{ color: C.gray }}>{message}</p>
     </Sheet>
