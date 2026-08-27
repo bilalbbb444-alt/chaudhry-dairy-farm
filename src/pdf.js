@@ -177,7 +177,7 @@ export async function buildProfitLossPdf(farmSettings, { mode, date, from, to, t
     },
   });
 
-  let y = doc.lastAutoTable.finY + 10;
+  let y = doc.lastAutoTable.finalY + 10;
 
   if (customerPayments && customerPayments.length > 0) {
     doc.setFont("helvetica", "bold");
@@ -193,7 +193,7 @@ export async function buildProfitLossPdf(farmSettings, { mode, date, from, to, t
       alternateRowStyles: { fillColor: [246, 241, 226] },
       columnStyles: { 1: { halign: "right" } },
     });
-    y = doc.lastAutoTable.finY + 10;
+    y = doc.lastAutoTable.finalY + 10;
   }
 
   if (supplierPayments && supplierPayments.length > 0) {
