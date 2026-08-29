@@ -853,8 +853,7 @@ export default function ChaudhryDairyFarm() {
       });
 
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
-      settled = true;
-      setSession(session);
+      finish(session);
       if (!session) {
         setMembership(null);
         setData(null);
