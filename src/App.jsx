@@ -821,11 +821,39 @@ export default function ChaudhryDairyFarm() {
 
   // ---- Auth session ----
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    let settled = false;
+    const finish = (session) => {
+      if (settled) return;
+      settled = true;
       setSession(session);
       setAuthLoading(false);
-    });
+    };
+
+    withTimeout(supabase.auth.getSession(), 6000)
+      .then(({ data: { session } }) => {
+        if (session) {
+          try { localStorage.setItem("cdf-last-membership-email", session.user.email || ""); } catch (e) {}
+        }
+        finish(session);
+      })
+      .catch(() => {
+        // getSession() hung or failed — almost always a dead connection trying to
+        // refresh an expired token. If this device has definitely signed in
+        // before (we have cached farm data locally), let the user back into
+        // their offline data instead of leaving them stuck on the splash screen.
+        try {
+          const cachedMembership = JSON.parse(localStorage.getItem("cdf-last-membership") || "null");
+          const cachedEmail = localStorage.getItem("cdf-last-membership-email") || "";
+          if (cachedMembership) {
+            finish({ user: { id: "offline-cached-user", email: cachedEmail }, offlineFallback: true });
+            return;
+          }
+        } catch (e) {}
+        finish(null);
+      });
+
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      settled = true;
       setSession(session);
       if (!session) {
         setMembership(null);
@@ -841,12 +869,25 @@ export default function ChaudhryDairyFarm() {
     if (!session) return;
     (async () => {
       setMembershipLoading(true);
+      const useCache = () => {
+        try {
+          const cached = JSON.parse(localStorage.getItem("cdf-last-membership") || "null");
+          if (cached) {
+            CURRENT_FARM_ID = cached.farmId;
+            setMembership(cached);
+            setRole(cached.role);
+            return true;
+          }
+        } catch (e) {}
+        return false;
+      };
+
+      if (session.offlineFallback) { useCache(); setMembershipLoading(false); return; }
+
       try {
-        const { data: rows, error } = await supabase
-          .from("farm_members")
-          .select("farm_id, role")
-          .eq("user_id", session.user.id)
-          .limit(1);
+        const { data: rows, error } = await withTimeout(
+          supabase.from("farm_members").select("farm_id, role").eq("user_id", session.user.id).limit(1)
+        );
         if (error) throw error;
         if (rows && rows[0]) {
           CURRENT_FARM_ID = rows[0].farm_id;
@@ -857,14 +898,7 @@ export default function ChaudhryDairyFarm() {
         }
       } catch (e) {
         // offline on a fresh load — fall back to the last membership we saw
-        try {
-          const cached = JSON.parse(localStorage.getItem("cdf-last-membership") || "null");
-          if (cached) {
-            CURRENT_FARM_ID = cached.farmId;
-            setMembership(cached);
-            setRole(cached.role);
-          }
-        } catch (e2) {}
+        useCache();
       }
       setMembershipLoading(false);
     })();
@@ -876,7 +910,8 @@ export default function ChaudhryDairyFarm() {
     (async () => {
       refreshPendingCount(membership.farmId);
       try {
-        const farmData = await fetchFarmData(membership.farmId);
+        if (!navigator.onLine) throw new Error("offline");
+        const farmData = await withTimeout(fetchFarmData(membership.farmId), 10000);
         setData(farmData);
         offline.saveSnapshot(membership.farmId, farmData);
       } catch (e) {
