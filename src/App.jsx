@@ -3156,7 +3156,6 @@ function ExpenseModal({ setData, onClose, notify }) {
 function EmployeesScreen({ data, setData, onBack, notify }) {
   const [showAdd, setShowAdd] = useState(false);
   const [payEmp, setPayEmp] = useState(null);
-  const [advanceEmp, setAdvanceEmp] = useState(null);
   const [editEmp, setEditEmp] = useState(null);
   const monthKey = today().slice(0, 7);
 
@@ -3177,10 +3176,8 @@ function EmployeesScreen({ data, setData, onBack, notify }) {
       ) : (
         <div className="flex flex-col gap-2">
           {data.employees.map((e, i) => {
-            const monthPayments = data.salaryPayments.filter((p) => p.employeeId === e.id && p.month === monthKey);
-            const paid = monthPayments.reduce((s, p) => s + p.paidAmount, 0);
-            const advanceGiven = monthPayments.reduce((s, p) => s + p.advance, 0);
-            const remaining = e.salary - paid - advanceGiven;
+            const paid = data.salaryPayments.filter((p) => p.employeeId === e.id && p.month === monthKey).reduce((s, p) => s + p.paidAmount, 0);
+            const remaining = e.salary - paid;
             return (
               <Card key={e.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
                 <div className="flex items-center justify-between mb-1">
@@ -3190,14 +3187,8 @@ function EmployeesScreen({ data, setData, onBack, notify }) {
                     <RowActions onEdit={() => setEditEmp(e)} onDelete={() => removeEmp(e.id)} />
                   </div>
                 </div>
-                <p className="text-[11px] mb-2" style={{ color: C.gray }}>
-                  {e.role} · Salary {fmt(e.salary)}
-                  {advanceGiven > 0 && <span> · Advance {fmt(advanceGiven)}</span>}
-                </p>
-                <div className="grid grid-cols-2 gap-2">
-                  <Btn variant="ghost" onClick={() => setPayEmp(e.id)}><Banknote size={14} /> Pay Salary</Btn>
-                  <Btn variant="outline" onClick={() => setAdvanceEmp(e.id)}><Wallet size={14} /> Give Advance</Btn>
-                </div>
+                <p className="text-[11px] mb-2" style={{ color: C.gray }}>{e.role} · Salary {fmt(e.salary)}</p>
+                <Btn variant="ghost" onClick={() => setPayEmp(e.id)}><Banknote size={14} /> Pay Salary</Btn>
               </Card>
             );
           })}
@@ -3206,7 +3197,6 @@ function EmployeesScreen({ data, setData, onBack, notify }) {
       {showAdd && <EmployeeModal setData={setData} onClose={() => setShowAdd(false)} notify={notify} />}
       {editEmp && <EmployeeModal setData={setData} employee={editEmp} onClose={() => setEditEmp(null)} notify={notify} />}
       {payEmp && <SalaryModal data={data} setData={setData} employeeId={payEmp} onClose={() => setPayEmp(null)} notify={notify} />}
-      {advanceEmp && <AdvanceModal data={data} setData={setData} employeeId={advanceEmp} onClose={() => setAdvanceEmp(null)} notify={notify} />}
     </Screen>
   );
 }
@@ -3272,44 +3262,6 @@ function SalaryModal({ data, setData, employeeId, onClose, notify }) {
   return (
     <Sheet title={`Pay ${emp?.name || ""}`} onClose={onClose} footer={<Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Payment"}</Btn>}>
       <Field label="Amount"><input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={String(emp?.salary || 0)} /></Field>
-    </Sheet>
-  );
-}
-
-function AdvanceModal({ data, setData, employeeId, onClose, notify }) {
-  const emp = data.employees.find((e) => e.id === employeeId);
-  const monthKey = today().slice(0, 7);
-  const monthPayments = data.salaryPayments.filter((p) => p.employeeId === employeeId && p.month === monthKey);
-  const alreadyAdvanced = monthPayments.reduce((s, p) => s + p.advance, 0);
-  const alreadyPaid = monthPayments.reduce((s, p) => s + p.paidAmount, 0);
-  const remaining = (emp?.salary || 0) - alreadyPaid - alreadyAdvanced;
-  const [amount, setAmount] = useState("");
-  const [note, setNote] = useState("");
-  const [saving, setSaving] = useState(false);
-  const save = async () => {
-    if (!amount) return;
-    setSaving(true);
-    try {
-      const row = await dbInsert("salaryPayments", { employeeId, month: monthKey, salary: emp.salary, advance: parseFloat(amount), deduction: 0, paidAmount: 0, date: today(), notes: note });
-      setData((d) => ({ ...d, salaryPayments: [...d.salaryPayments, row] }));
-      notify("Advance recorded");
-      onClose();
-    } catch (e) {
-      notify("Could not save advance");
-    } finally {
-      setSaving(false);
-    }
-  };
-  return (
-    <Sheet title={`Give Advance — ${emp?.name || ""}`} onClose={onClose} footer={<Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Advance"}</Btn>}>
-      <Card className="mb-3" style={{ background: C.greenPale, border: "none" }}>
-        <Row label="Monthly Salary" value={fmt(emp?.salary || 0)} />
-        <Row label="Already Advanced This Month" value={fmt(alreadyAdvanced)} />
-        <Row label="Remaining Before This Advance" value={fmt(remaining)} bold tone={remaining >= 0 ? "green" : "warn"} />
-      </Card>
-      <Field label="Advance Amount"><input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /></Field>
-      <Field label="Note (optional)"><input className={inputCls} style={inputStyle} value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Eid advance" /></Field>
-      <p className="text-[11px]" style={{ color: C.gray }}>This advance will automatically reduce how much salary is still owed to {emp?.name || "this employee"} this month.</p>
     </Sheet>
   );
 }
