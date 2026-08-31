@@ -77,7 +77,8 @@ export async function buildCustomerStatementPdf(farmSettings, customer, sales, p
 
   const totalMilk = sales.reduce((s, x) => s + x.quantity, 0);
   const totalBilled = sales.reduce((s, x) => s + x.total, 0);
-  const totalReceived = payments.reduce((s, p) => s + p.amount, 0);
+  const cashSalesTotal = sales.filter((s) => s.paymentStatus === "Paid").reduce((s, x) => s + x.total, 0);
+  const totalReceived = cashSalesTotal + payments.reduce((s, p) => s + p.amount, 0);
   const balance = customer.balance;
 
   doc.setTextColor(20, 30, 20);
@@ -112,9 +113,15 @@ export async function buildCustomerStatementPdf(farmSettings, customer, sales, p
     doc.setFont("helvetica", "normal");
   });
 
-  // build combined, running-balance ledger
+  // build combined, running-balance ledger. Cash/bank/etc. sales are paid at the
+  // moment of sale, so they carry an offsetting credit and never inflate the
+  // running balance — only unpaid Credit sales do that.
   const entries = [
-    ...sales.map((s) => ({ date: s.date, type: "sale", desc: `Milk sale — ${fmtLiters(s.quantity)} @ ${fmtMoney(s.pricePerLiter)}/L (${s.paymentMethod})`, debit: s.total, credit: 0 })),
+    ...sales.map((s) => ({
+      date: s.date, type: "sale",
+      desc: `Milk sale — ${fmtLiters(s.quantity)} @ ${fmtMoney(s.pricePerLiter)}/L (${s.paymentMethod})`,
+      debit: s.total, credit: s.paymentStatus === "Paid" ? s.total : 0,
+    })),
     ...payments.map((p) => ({ date: p.date, type: "payment", desc: `Payment received (${p.method})`, debit: 0, credit: p.amount })),
   ].sort((a, b) => a.date.localeCompare(b.date));
 

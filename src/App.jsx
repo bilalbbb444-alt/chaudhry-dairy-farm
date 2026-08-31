@@ -1991,7 +1991,11 @@ function CustomerProfile({ data, setData, custId, onBack, notify }) {
   const monthSales = data.sales.filter((s) => s.customerId === c.id && s.date.startsWith(monthPrefix));
   const monthMilk = monthSales.reduce((s, x) => s + x.quantity, 0);
   const monthBill = monthSales.reduce((s, x) => s + x.total, 0);
-  const monthPaid = data.custPayments.filter((p) => p.customerId === c.id && p.date.startsWith(monthPrefix)).reduce((s, p) => s + p.amount, 0);
+  // "Paid" = money actually received this month: cash/bank/etc. sales are paid at the
+  // moment of sale, plus any separate payments recorded against older credit.
+  const monthCashSales = monthSales.filter((s) => s.paymentStatus === "Paid").reduce((s, x) => s + x.total, 0);
+  const monthPaymentsReceived = data.custPayments.filter((p) => p.customerId === c.id && p.date.startsWith(monthPrefix)).reduce((s, p) => s + p.amount, 0);
+  const monthPaid = monthCashSales + monthPaymentsReceived;
 
   const history = [...data.sales.filter((s) => s.customerId === c.id), ...data.custPayments.filter((p) => p.customerId === c.id).map((p) => ({ ...p, isPayment: true }))]
     .sort((a, b) => b.date.localeCompare(a.date));
@@ -2030,6 +2034,7 @@ function CustomerProfile({ data, setData, custId, onBack, notify }) {
         <Row label="Total Milk" value={fmtL(monthMilk)} />
         <Row label="Bill" value={fmt(monthBill)} />
         <Row label="Paid" value={fmt(monthPaid)} />
+        <Row label="New Credit This Month" value={fmt(monthBill - monthPaid)} bold tone={monthBill - monthPaid > 0 ? "warn" : "green"} />
       </Card>
 
       <Card className="mb-4">
@@ -2174,7 +2179,9 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
   const monthPayments = allPayments.filter((p) => p.date.startsWith(billMonth));
   const billMonthMilk = monthSales.reduce((s, x) => s + x.quantity, 0);
   const billMonthTotal = monthSales.reduce((s, x) => s + x.total, 0);
-  const billMonthPaid = monthPayments.reduce((s, p) => s + p.amount, 0);
+  // Paid = cash/bank/etc. sales (paid at the moment of sale) + any separate payments recorded.
+  const billMonthCashSales = monthSales.filter((s) => s.paymentStatus === "Paid").reduce((s, x) => s + x.total, 0);
+  const billMonthPaid = billMonthCashSales + monthPayments.reduce((s, p) => s + p.amount, 0);
   const billMonthAvgPrice = billMonthMilk > 0 ? billMonthTotal / billMonthMilk : customer.defaultPrice;
   const billMonthLabel = new Date(billMonth + "-01").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
 
@@ -2182,7 +2189,8 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
   const filteredPayments = period === "all" ? allPayments : allPayments.filter((p) => p.date >= from && p.date <= to);
   const rangeMilk = filteredSales.reduce((s, x) => s + x.quantity, 0);
   const rangeBilled = filteredSales.reduce((s, x) => s + x.total, 0);
-  const rangeReceived = filteredPayments.reduce((s, p) => s + p.amount, 0);
+  const rangeCashSales = filteredSales.filter((s) => s.paymentStatus === "Paid").reduce((s, x) => s + x.total, 0);
+  const rangeReceived = rangeCashSales + filteredPayments.reduce((s, p) => s + p.amount, 0);
 
   const buildPdf = async () => {
     if (period === "month") {
