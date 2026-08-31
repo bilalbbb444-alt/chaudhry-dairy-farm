@@ -2030,7 +2030,12 @@ function CustomerProfile({ data, setData, custId, onBack, notify }) {
         <Row label="Total Milk" value={fmtL(monthMilk)} />
         <Row label="Bill" value={fmt(monthBill)} />
         <Row label="Paid" value={fmt(monthPaid)} />
-        <Row label="Balance" value={fmt(c.balance)} bold tone={c.balance > 0 ? "warn" : "green"} />
+      </Card>
+
+      <Card className="mb-4">
+        <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>ACCOUNT BALANCE (ALL TIME)</p>
+        <p className="text-[11px] mb-2" style={{ color: C.gray }}>Total outstanding across every credit sale and payment ever recorded — not limited to this month.</p>
+        <Row label="Total Credit Due" value={fmt(c.balance)} bold tone={c.balance > 0 ? "warn" : "green"} />
       </Card>
 
       <div className="grid grid-cols-2 gap-2 mb-4">
