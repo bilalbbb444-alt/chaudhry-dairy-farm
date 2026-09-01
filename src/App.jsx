@@ -37,7 +37,17 @@ const C = {
 const LOGO_SRC = "/logo.jpg";
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const today = () => new Date().toISOString().slice(0, 10);
+// Local-calendar-date helpers. Deliberately avoid toISOString() here — it
+// converts to UTC, which silently shifts the date near midnight for any
+// timezone ahead of UTC (like Pakistan, UTC+5), and was the cause of date
+// ranges quietly dropping a day or two at the edges.
+const toLocalISODate = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+const today = () => toLocalISODate(new Date());
 const fmt = (n) => "Rs. " + Math.round(n || 0).toLocaleString("en-US");
 const fmtL = (n) => (Math.round((n || 0) * 10) / 10) + " L";
 const fmtDate = (d) =>
@@ -45,7 +55,14 @@ const fmtDate = (d) =>
 const daysAgo = (n) => {
   const d = new Date();
   d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  return toLocalISODate(d);
+};
+// Parses a "YYYY-MM-DD" string as a local-time Date (midnight local), not UTC —
+// `new Date("YYYY-MM-DD")` parses as UTC and drifts a day when mixed with
+// local date math, which is exactly what caused the range-report bug.
+const parseLocalDate = (str) => {
+  const [y, m, d] = str.split("-").map(Number);
+  return new Date(y, m - 1, d);
 };
 // Staggered entrance delay for list rows — capped so long lists don't feel sluggish.
 const rowAnim = (i) => ({ className: "animate-row-in", style: { animationDelay: `${Math.min(i, 10) * 30}ms` } });
@@ -1207,10 +1224,10 @@ function computeRangeTotals(data, from, to) {
 
   // per-day breakdown for the chart
   const days = [];
-  let cur = new Date(from);
-  const end = new Date(to);
+  let cur = parseLocalDate(from);
+  const end = parseLocalDate(to);
   while (cur <= end && days.length < 62) {
-    const dStr = cur.toISOString().slice(0, 10);
+    const dStr = toLocalISODate(cur);
     const day = computeDayTotals(data, dStr);
     days.push({ date: dStr, day: cur.toLocaleDateString("en-GB", { day: "numeric", month: "short" }), milk: Math.round(day.milkProduced), profit: day.profit });
     cur.setDate(cur.getDate() + 1);
@@ -1579,10 +1596,10 @@ function MilkReportView({ data, notify }) {
 
   const chartData = rangeValid ? (() => {
     const days = [];
-    let cur = new Date(from);
-    const end = new Date(to);
+    let cur = parseLocalDate(from);
+    const end = parseLocalDate(to);
     while (cur <= end && days.length < 62) {
-      const dStr = cur.toISOString().slice(0, 10);
+      const dStr = toLocalISODate(cur);
       const dayTotal = data.milk.filter((m) => m.date === dStr).reduce((s, m) => s + m.quantity, 0);
       days.push({ day: cur.toLocaleDateString("en-GB", { day: "numeric", month: "short" }), milk: Math.round(dayTotal) });
       cur.setDate(cur.getDate() + 1);
