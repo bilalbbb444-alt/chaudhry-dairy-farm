@@ -1969,6 +1969,7 @@ function CustomerProfile({ data, setData, custId, onBack, notify }) {
   const [showSale, setShowSale] = useState(false);
   const [showPay, setShowPay] = useState(false);
   const [showBill, setShowBill] = useState(false);
+  const [billPeriod, setBillPeriod] = useState("month");
   const [showEdit, setShowEdit] = useState(false);
   if (!c) return null;
 
@@ -2050,7 +2051,12 @@ function CustomerProfile({ data, setData, custId, onBack, notify }) {
         <Btn variant="ghost" onClick={() => setShowBill(true)}><Share2 size={15} /> Share Bill</Btn>
       </div>
 
-      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>HISTORY</p>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold" style={{ color: C.gray }}>HISTORY</p>
+        <button onClick={() => { setBillPeriod("range"); setShowBill(true); }} className="flex items-center gap-1 text-xs font-semibold tap" style={{ color: C.green }}>
+          <Download size={13} /> Download Report
+        </button>
+      </div>
       <div className="flex flex-col gap-2">
         {history.length === 0 && <p className="text-xs" style={{ color: C.grayLight }}>No transactions yet.</p>}
         {history.map((h, i) => (
@@ -2068,7 +2074,7 @@ function CustomerProfile({ data, setData, custId, onBack, notify }) {
 
       {showSale && <SaleModal data={data} setData={setData} onClose={() => setShowSale(false)} notify={notify} presetCustomerId={c.id} />}
       {showPay && <QuickPaymentModal data={data} setData={setData} customerId={c.id} onClose={() => setShowPay(false)} notify={notify} />}
-      {showBill && <BillSheet data={data} customer={c} monthMilk={monthMilk} monthBill={monthBill} monthPaid={monthPaid} allSales={data.sales.filter((s) => s.customerId === c.id)} allPayments={data.custPayments.filter((p) => p.customerId === c.id)} onClose={() => setShowBill(false)} />}
+      {showBill && <BillSheet data={data} customer={c} monthMilk={monthMilk} monthBill={monthBill} monthPaid={monthPaid} allSales={data.sales.filter((s) => s.customerId === c.id)} allPayments={data.custPayments.filter((p) => p.customerId === c.id)} initialPeriod={billPeriod} onClose={() => setShowBill(false)} />}
       {showEdit && <CustomerModal setData={setData} customer={c} onClose={() => setShowEdit(false)} notify={notify} />}
     </Screen>
   );
@@ -2164,14 +2170,14 @@ function PaymentModal({ data, setData, onClose, notify }) {
   );
 }
 
-function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, allPayments, onClose }) {
+function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, allPayments, initialPeriod, onClose }) {
   const remaining = monthBill - monthPaid;
   const monthName = new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" });
   const message = `Dear ${customer.name}, your ${monthName} milk bill from ${data.settings.farmName} is ${fmt(monthBill)}. You have paid ${fmt(monthPaid)}. Total credit remaining is ${fmt(customer.balance)}.`;
   const [busy, setBusy] = useState(false);
-  const [period, setPeriod] = useState("month"); // month | all | range
+  const [period, setPeriod] = useState(initialPeriod || "month"); // month | all | range
   const [billMonth, setBillMonth] = useState(today().slice(0, 7)); // "YYYY-MM"
-  const [from, setFrom] = useState(daysAgo(30));
+  const [from, setFrom] = useState(daysAgo(7));
   const [to, setTo] = useState(today());
   const rangeValid = from && to && from <= to;
 
