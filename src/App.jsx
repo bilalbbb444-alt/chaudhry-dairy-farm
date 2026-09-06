@@ -104,6 +104,7 @@ const TABLES = {
   health: "animal_health",
   vaccinations: "vaccinations",
   breeding: "breeding_records",
+  aiAssessments: "ai_health_assessments",
 };
 
 // Set once per session right after the user's farm membership is resolved.
@@ -243,7 +244,7 @@ function farmRowToSettings(farm) {
 }
 
 async function fetchFarmData(farmId) {
-  const [farm, animals, milk, customers, sales, custPayments, inventory, purchases, expenses, employees, salaryPayments, closings, health, vaccinations, breeding] =
+  const [farm, animals, milk, customers, sales, custPayments, inventory, purchases, expenses, employees, salaryPayments, closings, health, vaccinations, breeding, aiAssessments] =
     await Promise.all([
       supabase.from("farms").select("*").eq("id", farmId).single(),
       supabase.from("animals").select("*").eq("farm_id", farmId),
@@ -260,6 +261,7 @@ async function fetchFarmData(farmId) {
       supabase.from("animal_health").select("*").eq("farm_id", farmId),
       supabase.from("vaccinations").select("*").eq("farm_id", farmId),
       supabase.from("breeding_records").select("*").eq("farm_id", farmId),
+      supabase.from("ai_health_assessments").select("*").eq("farm_id", farmId).order("checked_at", { ascending: false }),
     ]);
   if (farm.error) throw farm.error;
   return {
@@ -278,6 +280,7 @@ async function fetchFarmData(farmId) {
     health: (health.data || []).map(rowToCamel),
     vaccinations: (vaccinations.data || []).map(rowToCamel),
     breeding: (breeding.data || []).map(rowToCamel),
+    aiAssessments: (aiAssessments.data || []).map(rowToCamel),
   };
 }
 
@@ -1056,6 +1059,9 @@ export default function ChaudhryDairyFarm() {
       {tab === "more" && moreScreen === "settings" && (
         <SettingsScreen data={data} setData={setData} role={role} onBack={() => setMoreScreen(null)} onSignOut={signOut} userEmail={session.user.email} installPrompt={installPrompt} onInstalled={() => setInstallPrompt(null)} />
       )}
+      {tab === "more" && moreScreen === "aiCare" && (
+        <AiCareHome data={data} setData={setData} onBack={() => setMoreScreen(null)} notify={notify} session={session} />
+      )}
 
       {modal === "addMilk" && (
         <QuickMilkModal data={data} update={update} onClose={() => setModal(null)} notify={notify} />
@@ -1076,7 +1082,15 @@ export default function ChaudhryDairyFarm() {
         <CustomerModal setData={setData} onClose={() => setModal(null)} notify={notify} />
       )}
       {modal === "quickAdd" && (
-        <QuickAddSheet role={role} onClose={() => setModal(null)} onPick={(m) => setModal(m)} />
+        <QuickAddSheet role={role} onClose={() => setModal(null)} onPick={(m) => {
+          if (m === "aiHealth") {
+            setModal(null);
+            setTab("more");
+            setMoreScreen("aiCare");
+          } else {
+            setModal(m);
+          }
+        }} />
       )}
 
       {toast && (
@@ -1109,7 +1123,7 @@ export default function ChaudhryDairyFarm() {
         </div>
       )}
 
-      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} />
+      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} onQuickAdd={() => setModal("quickAdd")} />
     </div>
   );
 }
@@ -1123,34 +1137,45 @@ const fontImport = `
 /* ---------------------------------------------------------------- */
 /*  Bottom Nav                                                       */
 /* ---------------------------------------------------------------- */
-function BottomNav({ tab, setTab }) {
+function BottomNav({ tab, setTab, onQuickAdd }) {
   const items = [
     { key: "dashboard", label: "Home", icon: Home },
     { key: "milk", label: "Milk", icon: Droplet },
+  ];
+  const items2 = [
     { key: "sales", label: "Sales", icon: ShoppingCart },
     { key: "customers", label: "Customers", icon: Users },
     { key: "more", label: "More", icon: MoreHorizontal },
   ];
+  const renderTab = ({ key, label, icon: Icon }) => {
+    const active = tab === key;
+    return (
+      <button
+        key={key}
+        onClick={() => setTab(key)}
+        className="flex-1 flex flex-col items-center gap-1 py-2.5 tap relative"
+      >
+        <span
+          className="absolute top-1 w-8 h-8 rounded-full transition-all duration-200"
+          style={{ background: active ? C.greenPale : "transparent", transform: active ? "scale(1)" : "scale(0.6)", opacity: active ? 1 : 0 }}
+        />
+        <Icon size={20} color={active ? C.green : C.grayLight} strokeWidth={active ? 2.4 : 2} className="relative transition-transform duration-200" style={{ transform: active ? "translateY(-1px)" : "none" }} />
+        <span className="text-[10px] font-semibold relative transition-colors duration-200" style={{ color: active ? C.green : C.grayLight }}>{label}</span>
+      </button>
+    );
+  };
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 bg-white" style={{ borderTop: `1px solid ${C.line}`, boxShadow: "0 -2px 10px rgba(31,77,44,0.06)" }}>
-      <div className="max-w-md mx-auto flex">
-        {items.map(({ key, label, icon: Icon }) => {
-          const active = tab === key;
-          return (
-            <button
-              key={key}
-              onClick={() => setTab(key)}
-              className="flex-1 flex flex-col items-center gap-1 py-2.5 tap relative"
-            >
-              <span
-                className="absolute top-1 w-8 h-8 rounded-full transition-all duration-200"
-                style={{ background: active ? C.greenPale : "transparent", transform: active ? "scale(1)" : "scale(0.6)", opacity: active ? 1 : 0 }}
-              />
-              <Icon size={20} color={active ? C.green : C.grayLight} strokeWidth={active ? 2.4 : 2} className="relative transition-transform duration-200" style={{ transform: active ? "translateY(-1px)" : "none" }} />
-              <span className="text-[10px] font-semibold relative transition-colors duration-200" style={{ color: active ? C.green : C.grayLight }}>{label}</span>
-            </button>
-          );
-        })}
+      <div className="max-w-md mx-auto flex items-center">
+        {items.map(renderTab)}
+        {/* Quick Add — inline within the bar itself (not floating above it) so it
+            can never overlap page content, which is what caused problems before. */}
+        <div className="flex-1 flex justify-center py-1.5">
+          <button onClick={onQuickAdd} aria-label="Quick Add" className="tap flex items-center justify-center" style={{ width: 42, height: 42, borderRadius: "50%", background: C.green, boxShadow: "0 3px 10px rgba(31,77,44,0.35)" }}>
+            <Plus size={19} color="#fff" strokeWidth={2.6} />
+          </button>
+        </div>
+        {items2.map(renderTab)}
       </div>
     </div>
   );
@@ -1161,6 +1186,7 @@ function QuickAddSheet({ role, onClose, onPick }) {
   const actions = [
     { key: "addMilk", label: "Add Milk", icon: <Droplet size={20} />, tone: "green" },
     { key: "addSale", label: "Record Sale", icon: <ShoppingCart size={20} />, tone: "gold" },
+    { key: "aiHealth", label: "AI Animal Health", icon: <Stethoscope size={20} />, tone: "health" },
     ...(!isEmployee ? [
       { key: "addCustomer", label: "Add Customer", icon: <Users size={20} />, tone: "green" },
       { key: "addExpense", label: "Add Expense", icon: <Wallet size={20} />, tone: "warn" },
@@ -1168,8 +1194,8 @@ function QuickAddSheet({ role, onClose, onPick }) {
       { key: "addPurchase", label: "Add Purchase", icon: <Truck size={20} />, tone: "gold" },
     ] : []),
   ];
-  const toneBg = { green: C.greenPale, gold: C.goldSoft || "#F6EFD8", warn: "#FBEBD6" };
-  const toneFg = { green: C.green, gold: "#8A6B10", warn: "#A65A29" };
+  const toneBg = { green: C.greenPale, gold: C.goldSoft || "#F6EFD8", warn: "#FBEBD6", health: "#E5F0EE" };
+  const toneFg = { green: C.green, gold: "#8A6B10", warn: "#A65A29", health: "#2C7A6E" };
   return (
     <Sheet title="Quick Add" onClose={onClose}>
       <div className="grid grid-cols-2 gap-3 pb-2">
@@ -2510,6 +2536,7 @@ function AnimalProfile({ data, setData, animalId, onBack, notify }) {
         <Row label="Purchase Price" value={fmt(a.purchasePrice)} />
       </Card>
 
+      <AiAssessmentHistorySection data={data} animal={a} />
       <AnimalHealthSection data={data} setData={setData} animal={a} notify={notify} />
       <AnimalVaccinationSection data={data} setData={setData} animal={a} notify={notify} />
       <AnimalBreedingSection data={data} setData={setData} animal={a} notify={notify} />
@@ -2522,6 +2549,33 @@ function AnimalProfile({ data, setData, animalId, onBack, notify }) {
 /* ---------------------------------------------------------------- */
 /*  Animal Health / Vaccination / Breeding                            */
 /* ---------------------------------------------------------------- */
+function AiAssessmentHistorySection({ data, animal }) {
+  const [viewReport, setViewReport] = useState(null);
+  const list = data.aiAssessments.filter((r) => r.animalId === animal.id).sort((a, b) => (b.checkedAt || "").localeCompare(a.checkedAt || ""));
+  if (list.length === 0) return null;
+  return (
+    <Card className="mb-4">
+      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>AI HEALTH ASSESSMENTS</p>
+      <div className="flex flex-col gap-2">
+        {list.map((r) => {
+          const u = AI_URGENCY[r.urgencyLevel] || AI_URGENCY.monitor;
+          return (
+            <div key={r.id} className="rounded-xl p-2.5" style={{ background: C.creamDark }}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px]" style={{ color: C.gray }}>{r.checkedAt ? fmtDate(r.checkedAt) : ""}</span>
+                <Badge tone={u.tone}>{u.emoji} {u.label}</Badge>
+              </div>
+              <p className="text-[11px] mb-1.5" style={{ color: C.text }}>{(r.symptoms || []).slice(0, 3).join(", ") || "General check"}</p>
+              <button onClick={() => setViewReport(r)} className="text-xs font-semibold tap" style={{ color: C.green }}>View Report</button>
+            </div>
+          );
+        })}
+      </div>
+      {viewReport && <AiReportSheet data={data} report={viewReport} onClose={() => setViewReport(null)} />}
+    </Card>
+  );
+}
+
 function AnimalHealthSection({ data, setData, animal, notify }) {
   const [showAdd, setShowAdd] = useState(false);
   const records = data.health.filter((h) => h.animalId === animal.id).sort((a, b) => b.date.localeCompare(a.date));
@@ -3488,6 +3542,534 @@ function ReportsScreen({ data, setData, onBack, notify }) {
 /* ---------------------------------------------------------------- */
 /*  Settings                                                           */
 /* ---------------------------------------------------------------- */
+/* ---------------------------------------------------------------- */
+/*  Chaudhry AI Care — AI animal health assistant                    */
+/* ---------------------------------------------------------------- */
+const AI_URGENCY = {
+  monitor: { label: "MONITOR", tone: "green", emoji: "🟢" },
+  attention: { label: "ATTENTION RECOMMENDED", tone: "warn", emoji: "🟡" },
+  urgent: { label: "URGENT — CONTACT VET", tone: "danger", emoji: "🔴" },
+};
+
+const SYMPTOM_OPTIONS = [
+  "Not eating", "Drinking less", "Milk production decreased", "Fever suspected",
+  "Coughing", "Difficulty breathing", "Diarrhea", "Vomiting", "Swelling",
+  "Wound", "Skin problem", "Lameness", "Eye problem", "Unusual discharge", "Other",
+];
+
+async function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function callAiHealth(payload, session) {
+  const res = await withTimeout(
+    fetch(`https://ehnpsecmvtntnfooaoha.supabase.co/functions/v1/ai-health-assessment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify(payload),
+    }),
+    30000
+  );
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "AI Health Assistant is temporarily unavailable.");
+  return data;
+}
+
+function AiCareHome({ data, setData, onBack, notify, session }) {
+  const [flow, setFlow] = useState(null); // null shows the home view
+  const [viewReport, setViewReport] = useState(null);
+
+  const recent = [...data.aiAssessments].sort((a, b) => (b.checkedAt || "").localeCompare(a.checkedAt || ""));
+
+  if (flow) return <AiCareFlow data={data} setData={setData} onExit={() => setFlow(null)} notify={notify} session={session} />;
+
+  return (
+    <Screen>
+      <TopBar title="Chaudhry AI Care" subtitle="AI-Powered Animal Health Assistant" onBack={onBack} />
+      <Card className="mb-4 text-center py-6">
+        <div className="w-14 h-14 rounded-full mx-auto flex items-center justify-center mb-3" style={{ background: "#E5F0EE" }}>
+          <Stethoscope size={26} color="#2C7A6E" />
+        </div>
+        <p className="text-xs px-2 mb-4" style={{ color: C.gray }}>Describe symptoms, upload photos, or speak to get helpful animal-health guidance.</p>
+        <Btn onClick={() => setFlow(true)}><Stethoscope size={16} /> Start New Health Check</Btn>
+      </Card>
+
+      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>RECENT HEALTH CHECKS</p>
+      {recent.length === 0 ? (
+        <Empty icon={<Stethoscope size={22} color={C.green} />} title="No health checks yet" note="Start your first AI-assisted health check above." />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {recent.map((r) => {
+            const a = data.animals.find((x) => x.id === r.animalId);
+            const u = AI_URGENCY[r.urgencyLevel] || AI_URGENCY.monitor;
+            return (
+              <Card key={r.id} className="!py-3" onClick={() => setViewReport(r)}>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-sm font-semibold" style={{ color: C.text }}>{a ? `${a.name} — ${a.code}` : "Unknown animal"}</p>
+                  <Badge tone={u.tone}>{u.emoji} {u.label}</Badge>
+                </div>
+                <p className="text-[11px] mb-1" style={{ color: C.gray }}>{(r.symptoms || []).slice(0, 2).join(", ") || "General check"}</p>
+                <p className="text-[10px]" style={{ color: C.grayLight }}>{r.checkedAt ? fmtDate(r.checkedAt) : ""}</p>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {viewReport && <AiReportSheet data={data} report={viewReport} onClose={() => setViewReport(null)} />}
+    </Screen>
+  );
+}
+
+function AiReportSheet({ data, report, onClose }) {
+  const a = data.animals.find((x) => x.id === report.animalId);
+  const u = AI_URGENCY[report.urgencyLevel] || AI_URGENCY.monitor;
+  return (
+    <Sheet title="Health Assessment" onClose={onClose}>
+      <p className="font-display font-bold text-base mb-1" style={{ color: C.text }}>{a ? `${a.name} — ${a.code}` : "Unknown animal"}</p>
+      <p className="text-[11px] mb-3" style={{ color: C.gray }}>{report.checkedAt ? fmtDate(report.checkedAt) : ""}</p>
+      <Badge tone={u.tone}>{u.emoji} {u.label}</Badge>
+      <p className="text-sm mt-3 mb-3" style={{ color: C.text }}>{report.aiSummary}</p>
+      {(report.possibleConcerns || []).length > 0 && (
+        <div className="mb-3">
+          <p className="text-xs font-semibold mb-1.5" style={{ color: C.gray }}>POSSIBLE CONCERNS</p>
+          {report.possibleConcerns.map((c, i) => <p key={i} className="text-xs mb-1" style={{ color: C.text }}>• {c}</p>)}
+        </div>
+      )}
+      {(report.recommendedObservations || []).length > 0 && (
+        <div className="mb-3">
+          <p className="text-xs font-semibold mb-1.5" style={{ color: C.gray }}>WHAT TO CHECK NOW</p>
+          {report.recommendedObservations.map((c, i) => <p key={i} className="text-xs mb-1" style={{ color: C.text }}>✓ {c}</p>)}
+        </div>
+      )}
+      {report.veterinaryRecommendation && (
+        <Card style={{ background: "#FBEBD6", border: "none" }} className="mb-2">
+          <p className="text-xs font-semibold mb-1" style={{ color: C.text }}>🚨 Veterinary Guidance</p>
+          <p className="text-xs" style={{ color: C.text }}>{report.veterinaryRecommendation}</p>
+        </Card>
+      )}
+    </Sheet>
+  );
+}
+
+function AiCareFlow({ data, setData, onExit, notify, session }) {
+  const [step, setStep] = useState("select");
+  const [animal, setAnimal] = useState(null);
+  const [symptoms, setSymptoms] = useState([]);
+  const [description, setDescription] = useState("");
+  const [photos, setPhotos] = useState([]); // { id, preview, base64, mimeType }
+  const [problemStarted, setProblemStarted] = useState("Today");
+  const [eatingStatus, setEatingStatus] = useState("Normal");
+  const [drinkingStatus, setDrinkingStatus] = useState("Normal");
+  const [milkStatus, setMilkStatus] = useState("Normal");
+  const [temperature, setTemperature] = useState("");
+  const [notes, setNotes] = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const toggleSymptom = (s) => setSymptoms((prev) => prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]);
+
+  const runAnalysis = async () => {
+    setStep("analyzing");
+    setError("");
+    try {
+      const payload = {
+        mode: "assess",
+        animalId: animal.id,
+        symptoms, description, problemStarted, temperature,
+        eatingStatus, drinkingStatus, milkStatus,
+        images: photos.map((p) => ({ base64: p.base64, mimeType: p.mimeType })),
+      };
+      const res = await callAiHealth(payload, session);
+      setResult(res);
+      setStep("result");
+    } catch (e) {
+      setError(e.message || "AI Health Assistant is temporarily unavailable.");
+      setStep("error");
+    }
+  };
+
+  return (
+    <Screen>
+      <TopBar
+        title="Chaudhry AI Care"
+        subtitle={{ select: "Select Animal", describe: "Describe the Problem", photos: "Add Photos", info: "Health Information", analyzing: "Analyzing", result: "Health Assessment", error: "Unavailable" }[step]}
+        onBack={onExit}
+      />
+      {step === "select" && <AiSelectAnimal data={data} onSelect={(a) => { setAnimal(a); setStep("describe"); }} />}
+      {step === "describe" && (
+        <AiDescribeProblem
+          symptoms={symptoms} toggleSymptom={toggleSymptom}
+          description={description} setDescription={setDescription}
+          onBack={() => setStep("select")} onContinue={() => setStep("photos")}
+        />
+      )}
+      {step === "photos" && (
+        <AiUploadPhotos photos={photos} setPhotos={setPhotos} notify={notify} onBack={() => setStep("describe")} onContinue={() => setStep("info")} />
+      )}
+      {step === "info" && (
+        <AiHealthInfo
+          animal={animal} data={data}
+          problemStarted={problemStarted} setProblemStarted={setProblemStarted}
+          eatingStatus={eatingStatus} setEatingStatus={setEatingStatus}
+          drinkingStatus={drinkingStatus} setDrinkingStatus={setDrinkingStatus}
+          milkStatus={milkStatus} setMilkStatus={setMilkStatus}
+          temperature={temperature} setTemperature={setTemperature}
+          notes={notes} setNotes={setNotes}
+          onBack={() => setStep("photos")} onSubmit={runAnalysis}
+        />
+      )}
+      {step === "analyzing" && <AiAnalyzing />}
+      {step === "error" && (
+        <div className="text-center py-16">
+          <AlertTriangle size={28} color={C.warn} className="mx-auto mb-3" />
+          <p className="text-sm font-semibold mb-1" style={{ color: C.text }}>{error}</p>
+          <Btn variant="ghost" className="mt-4" onClick={runAnalysis}>Try Again</Btn>
+        </div>
+      )}
+      {step === "result" && result && (
+        <AiResult
+          animal={animal} result={result} session={session}
+          symptoms={symptoms} description={description} problemStarted={problemStarted}
+          temperature={temperature} eatingStatus={eatingStatus} drinkingStatus={drinkingStatus} milkStatus={milkStatus}
+          photos={photos} saving={saving}
+          onSave={async () => {
+            setSaving(true);
+            try {
+              const pendingId = uid() + uid();
+              // upload photos to private storage for permanent record-keeping
+              const imageUrls = [];
+              for (const p of photos) {
+                const path = `${CURRENT_FARM_ID}/${animal.id}/${pendingId}/${p.id}.jpg`;
+                const bytes = Uint8Array.from(atob(p.base64), (c) => c.charCodeAt(0));
+                const { error: upErr } = await supabase.storage.from("animal-health-images").upload(path, bytes, { contentType: p.mimeType, upsert: true });
+                if (!upErr) imageUrls.push(path);
+              }
+              const row = await dbInsert("aiAssessments", {
+                animalId: animal.id, symptoms, userDescription: description, problemStarted,
+                temperature: temperature ? parseFloat(temperature) : null,
+                eatingStatus, drinkingStatus, milkStatus, imageUrls,
+                aiSummary: result.summary, possibleConcerns: result.possibleConcerns || [],
+                recommendedObservations: result.recommendedObservations || [],
+                urgencyLevel: result.urgencyLevel, veterinaryRecommendation: result.veterinaryRecommendation,
+                language: "English",
+              });
+              setData((d) => ({ ...d, aiAssessments: [row, ...d.aiAssessments] }));
+              notify("Health report saved");
+              onExit();
+            } catch (e) {
+              notify("Could not save health report");
+            } finally {
+              setSaving(false);
+            }
+          }}
+        />
+      )}
+    </Screen>
+  );
+}
+
+function AiSelectAnimal({ data, onSelect }) {
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("All");
+  const filters = { All: () => true, Cows: (a) => a.type === "Cow", Buffalo: (a) => a.type === "Buffalo", Calves: (a) => a.type === "Calf", Sick: (a) => a.status === "Sick", Pregnant: (a) => a.status === "Pregnant" };
+  const list = data.animals.filter((a) => a.name.toLowerCase().includes(q.toLowerCase()) && filters[filter](a));
+  return (
+    <div>
+      <SearchBox value={q} onChange={setQ} placeholder="Search animals..." />
+      <Chips options={Object.keys(filters)} value={filter} onChange={setFilter} />
+      {list.length === 0 ? (
+        <Empty icon={<PawPrint size={22} color={C.green} />} title="No animals found" note="Try a different search or filter." />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {list.map((a) => (
+            <Card key={a.id} className="flex items-center !py-3" onClick={() => onSelect(a)}>
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 mr-3" style={{ background: C.greenPale, color: C.green }}>
+                <PawPrint size={18} />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-semibold" style={{ color: C.text }}>{a.name} <span style={{ color: C.grayLight }}>· {a.code}</span></p>
+                <p className="text-[11px]" style={{ color: C.gray }}>{a.type} · {a.breed}</p>
+              </div>
+              <Badge tone={a.status === "Sick" ? "danger" : a.status === "Milking" ? "green" : "gray"}>{a.status}</Badge>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiDescribeProblem({ symptoms, toggleSymptom, description, setDescription, onBack, onContinue }) {
+  const [listening, setListening] = useState(false);
+  const recognitionRef = useState(() => {
+    if (typeof window === "undefined") return null;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    return SR ? new SR() : null;
+  })[0];
+
+  const startVoice = () => {
+    if (!recognitionRef) { return; }
+    recognitionRef.lang = "en-US";
+    recognitionRef.interimResults = false;
+    recognitionRef.onresult = (e) => {
+      const transcript = e.results[0][0].transcript;
+      setDescription((prev) => (prev ? prev + " " : "") + transcript);
+    };
+    recognitionRef.onend = () => setListening(false);
+    recognitionRef.onerror = () => setListening(false);
+    setListening(true);
+    recognitionRef.start();
+  };
+
+  return (
+    <div>
+      <p className="font-display text-base font-bold mb-3" style={{ color: C.text }}>What's wrong with the animal?</p>
+      <Field label="Describe the problem">
+        <textarea
+          className={inputCls} style={{ ...inputStyle, minHeight: 90 }}
+          value={description} onChange={(e) => setDescription(e.target.value)}
+          placeholder="e.g. Bella has stopped eating since yesterday and her milk production has decreased."
+        />
+      </Field>
+      {recognitionRef && (
+        <Btn variant={listening ? "danger" : "ghost"} full className="mb-4" onClick={startVoice}>
+          {listening ? "Listening…" : <><span>🎤</span> Tap to Speak</>}
+        </Btn>
+      )}
+      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>QUICK SYMPTOMS</p>
+      <div className="flex flex-wrap gap-2 mb-5">
+        {SYMPTOM_OPTIONS.map((s) => {
+          const active = symptoms.includes(s);
+          return (
+            <button key={s} onClick={() => toggleSymptom(s)} className="px-3 py-1.5 rounded-full text-xs font-semibold tap" style={active ? { background: C.green, color: "#fff" } : { background: C.white, color: C.gray, border: `1px solid ${C.line}` }}>
+              {active ? "✓ " : ""}{s}
+            </button>
+          );
+        })}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Btn variant="outline" onClick={onBack}>Back</Btn>
+        <Btn onClick={onContinue}>Continue</Btn>
+      </div>
+    </div>
+  );
+}
+
+function AiUploadPhotos({ photos, setPhotos, notify, onBack, onContinue }) {
+  const addFiles = async (fileList) => {
+    const files = Array.from(fileList).slice(0, 6 - photos.length);
+    for (const file of files) {
+      try {
+        const base64 = await fileToBase64(file);
+        setPhotos((prev) => [...prev, { id: uid(), preview: URL.createObjectURL(file), base64, mimeType: file.type || "image/jpeg" }]);
+      } catch (e) {
+        notify("Could not read that image");
+      }
+    }
+  };
+  return (
+    <div>
+      <p className="font-display text-base font-bold mb-1" style={{ color: C.text }}>Add Photos</p>
+      <p className="text-xs mb-4" style={{ color: C.gray }}>Optional — a full-body photo plus a close-up of the affected area (skin, eye, mouth, udder, leg/hoof) helps the most.</p>
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        {photos.map((p) => (
+          <div key={p.id} className="relative rounded-xl overflow-hidden" style={{ aspectRatio: "1/1" }}>
+            <img src={p.preview} className="w-full h-full object-cover" alt="" />
+            <button onClick={() => setPhotos((prev) => prev.filter((x) => x.id !== p.id))} className="absolute top-1 right-1 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: "rgba(0,0,0,0.6)" }}>
+              <X size={12} color="#fff" />
+            </button>
+          </div>
+        ))}
+        {photos.length < 6 && (
+          <label className="rounded-xl flex flex-col items-center justify-center tap cursor-pointer" style={{ aspectRatio: "1/1", border: `1.5px dashed ${C.line}`, color: C.gray }}>
+            <Plus size={18} />
+            <span className="text-[10px] mt-1">Add Photo</span>
+            <input type="file" accept="image/*" multiple capture="environment" className="hidden" onChange={(e) => e.target.files && addFiles(e.target.files)} />
+          </label>
+        )}
+      </div>
+      <Card className="mb-5" style={{ background: C.greenPale, border: "none" }}>
+        <p className="text-[11px]" style={{ color: C.text }}>AI image analysis can help identify visible signs, but a photo alone cannot confirm a disease.</p>
+      </Card>
+      <div className="grid grid-cols-2 gap-2">
+        <Btn variant="outline" onClick={onBack}>Back</Btn>
+        <Btn onClick={onContinue}>Continue</Btn>
+      </div>
+    </div>
+  );
+}
+
+function SegButtons({ label, options, value, onChange }) {
+  return (
+    <Field label={label}>
+      <div className="flex gap-2">
+        {options.map((o) => (
+          <button key={o} onClick={() => onChange(o)} className="flex-1 rounded-xl py-2 text-xs font-semibold tap" style={value === o ? { background: C.green, color: "#fff" } : { background: C.white, color: C.gray, border: `1px solid ${C.line}` }}>
+            {o}
+          </button>
+        ))}
+      </div>
+    </Field>
+  );
+}
+
+function AiHealthInfo({ animal, data, problemStarted, setProblemStarted, eatingStatus, setEatingStatus, drinkingStatus, setDrinkingStatus, milkStatus, setMilkStatus, temperature, setTemperature, notes, setNotes, onBack, onSubmit }) {
+  const age = animal?.dob ? Math.max(0, Math.floor((Date.now() - new Date(animal.dob).getTime()) / (365.25 * 24 * 3600 * 1000))) : null;
+  return (
+    <div>
+      <Card className="mb-4">
+        <Row label="Animal" value={`${animal?.name || ""} — ${animal?.code || ""}`} />
+        {age !== null && <Row label="Age" value={`${age} years`} />}
+        <Row label="Breed" value={animal?.breed || "—"} />
+        <Row label="Gender" value={animal?.gender || "—"} />
+      </Card>
+      <SegButtons label="When did the problem start?" options={["Today", "1–3 days", "4–7 days", "More than a week"]} value={problemStarted} onChange={setProblemStarted} />
+      <SegButtons label="Eating" options={["Normal", "Reduced", "Not eating"]} value={eatingStatus} onChange={setEatingStatus} />
+      <SegButtons label="Drinking" options={["Normal", "Reduced", "Not drinking"]} value={drinkingStatus} onChange={setDrinkingStatus} />
+      <SegButtons label="Milk Production" options={["Normal", "Reduced", "Stopped"]} value={milkStatus} onChange={setMilkStatus} />
+      <Field label="Temperature (optional)"><input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={temperature} onChange={(e) => setTemperature(e.target.value)} placeholder="°F" /></Field>
+      <Field label="Additional Notes"><input className={inputCls} style={inputStyle} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Anything else worth mentioning" /></Field>
+      <div className="grid grid-cols-2 gap-2 mt-3">
+        <Btn variant="outline" onClick={onBack}>Back</Btn>
+        <Btn onClick={onSubmit}><Stethoscope size={15} /> Analyze</Btn>
+      </div>
+    </div>
+  );
+}
+
+function AiAnalyzing() {
+  const [checks, setChecks] = useState([false, false, false, false, false]);
+  useEffect(() => {
+    const labels = ["Symptoms", "Animal information", "Milk production", "Health history", "Uploaded photos"];
+    let i = 0;
+    const t = setInterval(() => {
+      i++;
+      setChecks((prev) => prev.map((c, idx) => idx < i ? true : c));
+      if (i >= labels.length) clearInterval(t);
+    }, 500);
+    return () => clearInterval(t);
+  }, []);
+  const labels = ["Symptoms", "Animal information", "Milk production", "Health history", "Uploaded photos"];
+  return (
+    <div className="py-10 text-center">
+      <MilkLoader label="Analyzing animal…" />
+      <div className="mt-6 flex flex-col gap-2 items-start max-w-[220px] mx-auto">
+        {labels.map((l, i) => (
+          <div key={l} className="flex items-center gap-2">
+            <Check size={14} color={checks[i] ? C.green : C.line} />
+            <span className="text-xs" style={{ color: checks[i] ? C.text : C.grayLight }}>{l}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AiResult({ animal, result, session, symptoms, description, problemStarted, temperature, eatingStatus, drinkingStatus, milkStatus, photos, saving, onSave }) {
+  const u = AI_URGENCY[result.urgencyLevel] || AI_URGENCY.monitor;
+  const [speaking, setSpeaking] = useState(false);
+  const [lang, setLang] = useState("English");
+  const [qaList, setQaList] = useState([]);
+  const [question, setQuestion] = useState("");
+  const [asking, setAsking] = useState(false);
+
+  const speakText = `${result.summary} ${result.veterinaryRecommendation || ""}`;
+  const langCode = { English: "en-US", Urdu: "ur-PK", Punjabi: "pa-IN" }[lang];
+
+  const speak = () => {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(speakText);
+    utter.lang = langCode;
+    utter.onend = () => setSpeaking(false);
+    setSpeaking(true);
+    window.speechSynthesis.speak(utter);
+  };
+  const pause = () => { window.speechSynthesis.pause(); };
+  const replay = () => speak();
+
+  const askFollowUp = async () => {
+    if (!question.trim()) return;
+    setAsking(true);
+    try {
+      const res = await callAiHealth({ mode: "followup", animalId: animal.id, priorSummary: result.summary, question }, session);
+      setQaList((prev) => [...prev, { q: question, a: res.answer }]);
+      setQuestion("");
+    } catch (e) {
+      setQaList((prev) => [...prev, { q: question, a: "Sorry, I couldn't get an answer right now. Please try again." }]);
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="font-display text-base font-bold" style={{ color: C.text }}>{animal.name} — {animal.code}</p>
+      <div className="mt-2 mb-4"><Badge tone={u.tone}>{u.emoji} {u.label}</Badge></div>
+
+      <Card className="mb-4">
+        <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>SUMMARY</p>
+        <p className="text-sm" style={{ color: C.text }}>{result.summary}</p>
+      </Card>
+
+      {(result.possibleConcerns || []).length > 0 && (
+        <Card className="mb-4">
+          <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>POSSIBLE CONCERNS</p>
+          {result.possibleConcerns.map((c, i) => <p key={i} className="text-xs mb-1.5" style={{ color: C.text }}>{i + 1}. {c}</p>)}
+        </Card>
+      )}
+
+      {(result.recommendedObservations || []).length > 0 && (
+        <Card className="mb-4">
+          <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>WHAT TO CHECK NOW</p>
+          {result.recommendedObservations.map((c, i) => <p key={i} className="text-xs mb-1.5" style={{ color: C.text }}>✓ {c}</p>)}
+        </Card>
+      )}
+
+      <Card className="mb-4" style={{ background: "#FBEBD6", border: "none" }}>
+        <p className="text-xs font-semibold mb-1.5" style={{ color: C.text }}>🚨 When to Contact a Veterinarian</p>
+        <p className="text-xs mb-2" style={{ color: C.text }}>{result.veterinaryRecommendation}</p>
+        <p className="text-[10.5px]" style={{ color: C.gray }}>Severe breathing difficulty, inability to stand, severe bleeding or injury, rapid worsening, or the animal stopping eating/drinking entirely all warrant contacting a veterinarian right away.</p>
+      </Card>
+
+      {"speechSynthesis" in window && (
+        <Card className="mb-4">
+          <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>🔊 LISTEN TO ASSESSMENT</p>
+          <Chips options={["English", "Urdu", "Punjabi"]} value={lang} onChange={setLang} />
+          <div className="flex gap-2 mt-1">
+            <Btn variant="ghost" onClick={speak} disabled={speaking}><span>▶</span> Play</Btn>
+            <Btn variant="outline" onClick={pause}><span>⏸</span> Pause</Btn>
+            <Btn variant="outline" onClick={replay}><span>🔁</span> Replay</Btn>
+          </div>
+        </Card>
+      )}
+
+      <Card className="mb-4">
+        <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>ASK CHAUDHRY AI</p>
+        {qaList.map((qa, i) => (
+          <div key={i} className="mb-2">
+            <p className="text-xs font-semibold" style={{ color: C.text }}>Q: {qa.q}</p>
+            <p className="text-xs" style={{ color: C.gray }}>{qa.a}</p>
+          </div>
+        ))}
+        <div className="flex gap-2 mt-1">
+          <input className={inputCls} style={inputStyle} value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="What should I monitor today?" />
+          <Btn onClick={askFollowUp} disabled={asking}>{asking ? "…" : "Ask"}</Btn>
+        </div>
+      </Card>
+
+      <Btn full onClick={onSave} disabled={saving}>{saving ? "Saving…" : "Save Health Report"}</Btn>
+    </div>
+  );
+}
+
 function SettingsScreen({ data, setData, role, onBack, onSignOut, userEmail, installPrompt, onInstalled }) {
   const s = data.settings;
   const patch = (k, v) => setData((d) => ({ ...d, settings: { ...d.settings, [k]: v } }));
