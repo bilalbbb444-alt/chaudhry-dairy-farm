@@ -569,10 +569,11 @@ function TopBar({ title, subtitle, onBack, right }) {
   );
 }
 
-function Card({ children, className = "", style = {} }) {
+function Card({ children, className = "", style = {}, onClick }) {
   return (
     <div
-      className={"rounded-2xl bg-white p-4 shadow-sm press " + className}
+      onClick={onClick}
+      className={"rounded-2xl bg-white p-4 shadow-sm press " + (onClick ? "cursor-pointer " : "") + className}
       style={{ border: `1px solid ${C.line}`, boxShadow: "0 1px 2px rgba(31,77,44,0.05), 0 1px 1px rgba(31,77,44,0.03)", ...style }}
     >
       {children}
