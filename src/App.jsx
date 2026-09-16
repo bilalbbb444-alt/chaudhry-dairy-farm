@@ -105,6 +105,10 @@ const TABLES = {
   vaccinations: "vaccinations",
   breeding: "breeding_records",
   aiAssessments: "ai_health_assessments",
+  suppliers: "suppliers",
+  purchaseItems: "purchase_items",
+  supplierPayments: "supplier_payments",
+  invTransactions: "inventory_transactions",
 };
 
 // Set once per session right after the user's farm membership is resolved.
@@ -182,6 +186,65 @@ async function dbDelete(key, id) {
 
 // Replays queued offline operations against Supabase in order, remapping
 // any references to records that were themselves created offline.
+/* ---------------------------------------------------------------- */
+/*  Inventory RPCs — these run server-side in a single transaction so
+    stock, ledger, expense and supplier records can never half-save.
+    They need a live connection (no offline queue) because the server
+    computes weighted-average cost from current stock.                */
+/* ---------------------------------------------------------------- */
+async function rpcRecordUsage({ itemId, qty, type = "usage", reason, date, notes }) {
+  const { data, error } = await withTimeout(
+    supabase.rpc("record_stock_usage", {
+      p_item_id: itemId, p_qty: qty, p_type: type,
+      p_reason: reason || null, p_date: date || today(),
+      p_notes: notes || null, p_create_expense: true,
+    })
+  );
+  if (error) throw error;
+  return data;
+}
+
+async function rpcAddStock({ itemId, qty, unitCost, type = "adjustment", date, notes }) {
+  const { data, error } = await withTimeout(
+    supabase.rpc("apply_stock_in", {
+      p_item_id: itemId, p_qty: qty, p_unit_cost: unitCost || 0,
+      p_type: type, p_reference_type: "manual", p_reference_id: null,
+      p_date: date || today(), p_notes: notes || null,
+    })
+  );
+  if (error) throw error;
+  return data;
+}
+
+async function rpcRecordPurchase({ supplierId, supplierName, date, invoiceNumber, discount, paid, paymentMethod, notes, items }) {
+  const { data, error } = await withTimeout(
+    supabase.rpc("record_purchase", {
+      p_supplier_id: supplierId || null,
+      p_supplier_name: supplierName || null,
+      p_date: date || today(),
+      p_invoice_number: invoiceNumber || null,
+      p_discount: discount || 0,
+      p_paid: paid || 0,
+      p_payment_method: paymentMethod || "Cash",
+      p_notes: notes || null,
+      p_items: items,
+    }),
+    20000
+  );
+  if (error) throw error;
+  return data;
+}
+
+// Turns a raw postgres error into something a farmer can act on.
+function friendlyDbError(e) {
+  const m = e?.message || "";
+  if (/available in stock/i.test(m)) return m.replace(/^.*?:\s*/, "");
+  if (/Not authorised/i.test(m)) return "You don't have access to this farm.";
+  if (/greater than zero/i.test(m)) return "Enter a quantity greater than zero.";
+  if (!navigator.onLine) return "You're offline. Stock changes need an internet connection.";
+  return "Could not save. Please try again.";
+}
+
 async function flushOfflineQueue(farmId) {
   const queue = offline.getQueue(farmId);
   if (queue.length === 0) return { synced: 0, remaining: 0 };
@@ -244,7 +307,7 @@ function farmRowToSettings(farm) {
 }
 
 async function fetchFarmData(farmId) {
-  const [farm, animals, milk, customers, sales, custPayments, inventory, purchases, expenses, employees, salaryPayments, closings, health, vaccinations, breeding, aiAssessments] =
+  const [farm, animals, milk, customers, sales, custPayments, inventory, purchases, expenses, employees, salaryPayments, closings, health, vaccinations, breeding, aiAssessments, suppliers, purchaseItems, supplierPayments, invTransactions] =
     await Promise.all([
       supabase.from("farms").select("*").eq("id", farmId).single(),
       supabase.from("animals").select("*").eq("farm_id", farmId),
@@ -262,6 +325,10 @@ async function fetchFarmData(farmId) {
       supabase.from("vaccinations").select("*").eq("farm_id", farmId),
       supabase.from("breeding_records").select("*").eq("farm_id", farmId),
       supabase.from("ai_health_assessments").select("*").eq("farm_id", farmId).order("checked_at", { ascending: false }),
+      supabase.from("suppliers").select("*").eq("farm_id", farmId),
+      supabase.from("purchase_items").select("*").eq("farm_id", farmId),
+      supabase.from("supplier_payments").select("*").eq("farm_id", farmId),
+      supabase.from("inventory_transactions").select("*").eq("farm_id", farmId).order("transaction_date", { ascending: false }).limit(500),
     ]);
   if (farm.error) throw farm.error;
   return {
@@ -281,6 +348,10 @@ async function fetchFarmData(farmId) {
     vaccinations: (vaccinations.data || []).map(rowToCamel),
     breeding: (breeding.data || []).map(rowToCamel),
     aiAssessments: (aiAssessments.data || []).map(rowToCamel),
+    suppliers: (suppliers.data || []).map(rowToCamel),
+    purchaseItems: (purchaseItems.data || []).map(rowToCamel),
+    supplierPayments: (supplierPayments.data || []).map(rowToCamel),
+    invTransactions: (invTransactions.data || []).map(rowToCamel),
   };
 }
 
@@ -2775,37 +2846,105 @@ function BreedingModal({ setData, animal, onClose, notify }) {
 function InventoryScreen({ data, setData, onBack, notify }) {
   const [showAdd, setShowAdd] = useState(false);
   const [editItem, setEditItem] = useState(null);
-  const stockValue = data.inventory.reduce((s, i) => s + i.currentStock * i.avgCost, 0);
+  const [usageItem, setUsageItem] = useState(null);
+  const [addStockItem, setAddStockItem] = useState(null);
+  const [detailItem, setDetailItem] = useState(null);
+  const [filter, setFilter] = useState("All");
+
+  const items = data.inventory.filter((i) => !i.archived);
+  const stockValue = items.reduce((s, i) => s + i.currentStock * i.avgCost, 0);
+  const lowStock = items.filter((i) => i.currentStock > 0 && i.currentStock <= i.minimumStock);
+  const outOfStock = items.filter((i) => i.currentStock <= 0);
+  const expiringSoon = items.filter((i) => i.expiryDate && i.expiryDate <= daysAgo(-30));
+
+  const categories = ["All", ...Array.from(new Set(items.map((i) => i.category).filter(Boolean)))];
+  const list = filter === "All" ? items : items.filter((i) => i.category === filter);
 
   const remove = async (id) => {
     try { await dbDelete("inventory", id); setData((d) => ({ ...d, inventory: d.inventory.filter((i) => i.id !== id) })); notify("Item deleted"); }
     catch (e) { notify("Could not delete item"); }
   };
 
+  // After any stock movement the server is the source of truth, so pull the
+  // affected item and the ledger back rather than guessing locally.
+  const refreshInventory = async () => {
+    try {
+      const [inv, tx, exp] = await Promise.all([
+        supabase.from("inventory").select("*").eq("farm_id", CURRENT_FARM_ID),
+        supabase.from("inventory_transactions").select("*").eq("farm_id", CURRENT_FARM_ID).order("transaction_date", { ascending: false }).limit(500),
+        supabase.from("expenses").select("*").eq("farm_id", CURRENT_FARM_ID),
+      ]);
+      setData((d) => ({
+        ...d,
+        inventory: (inv.data || []).map(rowToCamel),
+        invTransactions: (tx.data || []).map(rowToCamel),
+        expenses: (exp.data || []).map(rowToCamel),
+      }));
+    } catch (e) { /* view will refresh on next load */ }
+  };
+
+  if (detailItem) {
+    const live = data.inventory.find((i) => i.id === detailItem) || null;
+    if (live) return (
+      <InventoryItemDetail
+        data={data} item={live} onBack={() => setDetailItem(null)}
+        onUse={() => setUsageItem(live)} onAddStock={() => setAddStockItem(live)}
+        onEdit={() => setEditItem(live)}
+      />
+    );
+  }
+
   return (
     <Screen>
-      <TopBar title="Inventory" subtitle={`Stock value ${fmt(stockValue)}`} onBack={onBack} right={
+      <TopBar title="Inventory" subtitle={`${items.length} items`} onBack={onBack} right={
         <button onClick={() => setShowAdd(true)} className="p-2 rounded-full" style={{ background: C.green }}><Plus size={18} color="white" /></button>
       } />
-      {data.inventory.length === 0 ? (
-        <Empty icon={<Package size={22} color={C.green} />} title="No inventory items" note="Add feed, medicine or supplies." actionLabel="Add Item" onAction={() => setShowAdd(true)} />
+
+      <div className="rounded-[22px] p-5 mb-4 relative overflow-hidden" style={{ background: C.green }}>
+        <svg className="absolute inset-x-0 bottom-0 w-full opacity-[0.08]" height="60" viewBox="0 0 375 60" preserveAspectRatio="none">
+          <path d="M0 38 C 70 20, 120 50, 190 32 S 310 15, 375 38 V60 H0 Z" fill="#fff" />
+        </svg>
+        <p className="relative text-white/75 text-xs font-bold tracking-[0.12em] mb-2">TOTAL INVENTORY VALUE</p>
+        <p className="font-display text-[28px] font-bold text-white leading-none">{fmt(stockValue)}</p>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2.5 mb-5">
+        <FinCard icon={<Package size={13} />} label="Low Stock" value={String(lowStock.length)} tone={lowStock.length ? "warn" : "green"} />
+        <FinCard icon={<AlertTriangle size={13} />} label="Out of Stock" value={String(outOfStock.length)} tone={outOfStock.length ? "danger" : "green"} />
+        <FinCard icon={<Calendar size={13} />} label="Expiring" value={String(expiringSoon.length)} tone={expiringSoon.length ? "warn" : "green"} />
+      </div>
+
+      {categories.length > 2 && <Chips options={categories} value={filter} onChange={setFilter} />}
+
+      {list.length === 0 ? (
+        <Empty icon={<Package size={22} color={C.green} />} title="No inventory items" note="Add feed, medicine or supplies to start tracking stock." actionLabel="Add Item" onAction={() => setShowAdd(true)} />
       ) : (
         <div className="flex flex-col gap-2">
-          {data.inventory.map((i, idx) => {
-            const low = i.currentStock <= i.minimumStock;
+          {list.map((i, idx) => {
+            const out = i.currentStock <= 0;
+            const low = !out && i.currentStock <= i.minimumStock;
             const pct = Math.min(100, Math.round((i.currentStock / (i.minimumStock * 2 || 1)) * 100));
             return (
               <Card key={i.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(idx, 10) * 30}ms` }}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <p className="text-sm font-semibold" style={{ color: C.text }}>{i.name}</p>
-                  <div className="flex items-center gap-1.5">
-                    {low && <Badge tone="warn">Low Stock</Badge>}
-                    <RowActions onEdit={() => setEditItem(i)} onDelete={() => remove(i.id)} />
+                <div onClick={() => setDetailItem(i.id)} className="cursor-pointer">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className="text-sm font-semibold" style={{ color: C.text }}>{i.name}</p>
+                    <div className="flex items-center gap-1.5">
+                      {out ? <Badge tone="danger">Out of Stock</Badge> : low ? <Badge tone="warn">Low Stock</Badge> : <Badge tone="green">Normal</Badge>}
+                      <RowActions onEdit={() => setEditItem(i)} onDelete={() => remove(i.id)} />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-[11px] mb-2" style={{ color: C.gray }}>
+                    <span>{i.category} · {i.currentStock} {i.unit} · min {i.minimumStock}</span>
+                    <span className="font-display font-bold" style={{ color: C.text }}>{fmt(i.currentStock * i.avgCost)}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full w-full mb-2.5" style={{ background: C.line }}>
+                    <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: out ? C.danger : low ? C.warn : C.green }} />
                   </div>
                 </div>
-                <p className="text-[11px] mb-2" style={{ color: C.gray }}>{i.category} · {i.currentStock} {i.unit} in stock · min {i.minimumStock} {i.unit}</p>
-                <div className="h-1.5 rounded-full w-full" style={{ background: C.line }}>
-                  <div className="h-1.5 rounded-full" style={{ width: `${pct}%`, background: low ? C.warn : C.green }} />
+                <div className="grid grid-cols-2 gap-2">
+                  <Btn variant="ghost" onClick={() => setUsageItem(i)}><Minus size={13} /> Record Usage</Btn>
+                  <Btn variant="outline" onClick={() => setAddStockItem(i)}><Plus size={13} /> Add Stock</Btn>
                 </div>
               </Card>
             );
@@ -2814,9 +2953,211 @@ function InventoryScreen({ data, setData, onBack, notify }) {
       )}
       {showAdd && <InventoryModal setData={setData} onClose={() => setShowAdd(false)} notify={notify} />}
       {editItem && <InventoryModal setData={setData} item={editItem} onClose={() => setEditItem(null)} notify={notify} />}
+      {usageItem && <RecordUsageModal item={usageItem} onClose={() => setUsageItem(null)} notify={notify} onDone={refreshInventory} />}
+      {addStockItem && <AddStockModal item={addStockItem} onClose={() => setAddStockItem(null)} notify={notify} onDone={refreshInventory} />}
     </Screen>
   );
 }
+
+const USAGE_REASONS = ["Daily Animal Feeding", "Medicine", "Farm Operation", "Wastage", "Other"];
+
+function RecordUsageModal({ item, onClose, notify, onDone }) {
+  const [qty, setQty] = useState("");
+  const [reason, setReason] = useState(USAGE_REASONS[0]);
+  const [date, setDate] = useState(today());
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const n = parseFloat(qty) || 0;
+  const cost = n * (item.avgCost || 0);
+  const tooMuch = n > item.currentStock;
+  const isWastage = reason === "Wastage";
+
+  const save = async () => {
+    setErr("");
+    if (n <= 0) { setErr("Enter a quantity greater than zero."); return; }
+    if (tooMuch) { setErr(`Only ${item.currentStock} ${item.unit} available in stock.`); return; }
+    setSaving(true);
+    try {
+      await rpcRecordUsage({
+        itemId: item.id, qty: n,
+        type: isWastage ? "wastage" : "usage",
+        reason, date, notes,
+      });
+      await onDone();
+      notify(`${isWastage ? "Wastage" : "Usage"} recorded · ${fmt(cost)} expense`);
+      onClose();
+    } catch (e) {
+      setErr(friendlyDbError(e));
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Sheet title={`Record Usage — ${item.name}`} onClose={onClose}
+      footer={<Btn full onClick={save} disabled={saving || n <= 0 || tooMuch}>{saving ? "Saving…" : `Record Usage · ${fmt(cost)}`}</Btn>}>
+      <Card className="mb-3" style={{ background: C.greenPale, border: "none" }}>
+        <Row label="Available" value={`${item.currentStock} ${item.unit}`} />
+        <Row label="Average Cost" value={`${fmt(item.avgCost)}/${item.unit}`} />
+      </Card>
+      <Field label={`Quantity Used (${item.unit})`}>
+        <input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={qty} onChange={(e) => setQty(e.target.value)} placeholder="0" />
+      </Field>
+      <Field label="Reason">
+        <select className={inputCls} style={inputStyle} value={reason} onChange={(e) => setReason(e.target.value)}>
+          {USAGE_REASONS.map((r) => <option key={r}>{r}</option>)}
+        </select>
+      </Field>
+      <Field label="Date"><input type="date" max={today()} className={inputCls} style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+      <Field label="Notes (optional)"><input className={inputCls} style={inputStyle} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
+      {err && <p className="text-xs mb-2" style={{ color: C.danger }}>{err}</p>}
+      {n > 0 && !tooMuch && (
+        <Card style={{ background: C.creamDark, border: "none" }}>
+          <Row label="Consumption Cost" value={fmt(cost)} bold />
+          <Row label="Stock After" value={`${Math.round((item.currentStock - n) * 100) / 100} ${item.unit}`} />
+          <p className="text-[11px] mt-2" style={{ color: C.gray }}>This creates a {fmt(cost)} expense automatically — the purchase itself is not counted again.</p>
+        </Card>
+      )}
+    </Sheet>
+  );
+}
+
+function AddStockModal({ item, onClose, notify, onDone }) {
+  const [qty, setQty] = useState("");
+  const [cost, setCost] = useState(String(item.avgCost || ""));
+  const [date, setDate] = useState(today());
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  const n = parseFloat(qty) || 0;
+  const c = parseFloat(cost) || 0;
+  const newStock = item.currentStock + n;
+  const newAvg = newStock > 0 ? ((item.currentStock * item.avgCost) + (n * c)) / newStock : c;
+
+  const save = async () => {
+    setErr("");
+    if (n <= 0) { setErr("Enter a quantity greater than zero."); return; }
+    setSaving(true);
+    try {
+      await rpcAddStock({ itemId: item.id, qty: n, unitCost: c, type: "adjustment", date, notes });
+      await onDone();
+      notify("Stock added");
+      onClose();
+    } catch (e) {
+      setErr(friendlyDbError(e));
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Sheet title={`Add Stock — ${item.name}`} onClose={onClose}
+      footer={<Btn full onClick={save} disabled={saving || n <= 0}>{saving ? "Saving…" : "Add Stock"}</Btn>}>
+      <p className="text-[11px] mb-3" style={{ color: C.gray }}>For opening stock or a manual correction. If you bought this from a supplier, use New Purchase instead so the supplier balance is recorded.</p>
+      <Field label={`Quantity (${item.unit})`}>
+        <input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={qty} onChange={(e) => setQty(e.target.value)} placeholder="0" />
+      </Field>
+      <Field label={`Cost per ${item.unit}`}>
+        <input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={cost} onChange={(e) => setCost(e.target.value)} />
+      </Field>
+      <Field label="Date"><input type="date" max={today()} className={inputCls} style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+      <Field label="Notes (optional)"><input className={inputCls} style={inputStyle} value={notes} onChange={(e) => setNotes(e.target.value)} /></Field>
+      {err && <p className="text-xs mb-2" style={{ color: C.danger }}>{err}</p>}
+      {n > 0 && (
+        <Card style={{ background: C.creamDark, border: "none" }}>
+          <Row label="Stock After" value={`${Math.round(newStock * 100) / 100} ${item.unit}`} />
+          <Row label="New Average Cost" value={`${fmt(newAvg)}/${item.unit}`} bold />
+        </Card>
+      )}
+    </Sheet>
+  );
+}
+
+const TX_LABEL = {
+  purchase: { label: "Purchase", tone: "green" },
+  usage: { label: "Usage", tone: "warn" },
+  wastage: { label: "Wastage", tone: "danger" },
+  adjustment: { label: "Adjustment", tone: "gray" },
+  return: { label: "Return", tone: "gray" },
+  opening_stock: { label: "Opening Stock", tone: "green" },
+};
+
+function InventoryItemDetail({ data, item, onBack, onUse, onAddStock, onEdit }) {
+  const tx = data.invTransactions
+    .filter((t) => t.inventoryItemId === item.id)
+    .sort((a, b) => (b.transactionDate || "").localeCompare(a.transactionDate || ""));
+
+  // Average daily usage over the days we actually have usage data for.
+  const usageTx = tx.filter((t) => t.transactionType === "usage");
+  const usageDays = new Set(usageTx.map((t) => t.transactionDate)).size;
+  const totalUsed = usageTx.reduce((s, t) => s + Math.abs(Number(t.quantity)), 0);
+  const avgDaily = usageDays >= 2 ? totalUsed / usageDays : null;
+  const daysLeft = avgDaily && avgDaily > 0 ? Math.floor(item.currentStock / avgDaily) : null;
+
+  const out = item.currentStock <= 0;
+  const low = !out && item.currentStock <= item.minimumStock;
+
+  return (
+    <Screen>
+      <TopBar title={item.name} subtitle={`${item.category} · ${item.unit}`} onBack={onBack} right={
+        <button onClick={onEdit} className="p-2 rounded-full tap active:bg-black/5"><Pencil size={16} color={C.gray} /></button>
+      } />
+
+      <div className="rounded-[22px] p-5 mb-4" style={{ background: C.green }}>
+        <p className="text-white/75 text-xs font-bold tracking-[0.12em] mb-2">CURRENT STOCK</p>
+        <p className="font-display text-[28px] font-bold text-white leading-none">{item.currentStock} {item.unit}</p>
+        <p className="text-white/70 text-xs mt-2">Value {fmt(item.currentStock * item.avgCost)} · {fmt(item.avgCost)}/{item.unit} average</p>
+      </div>
+
+      <div className="mb-4">
+        {out ? <Badge tone="danger">Out of Stock</Badge> : low ? <Badge tone="warn">Low Stock</Badge> : <Badge tone="green">Normal</Badge>}
+      </div>
+
+      <Card className="mb-4">
+        <Row label="Minimum Stock" value={`${item.minimumStock} ${item.unit}`} />
+        <Row label="Average Daily Usage" value={avgDaily ? `${Math.round(avgDaily * 10) / 10} ${item.unit}/day` : "Not enough usage data"} />
+        <Row label="Estimated Remaining" value={daysLeft !== null ? `${daysLeft} days` : "Not enough usage data"} />
+        {item.expiryDate && <Row label="Expiry" value={fmtDate(item.expiryDate)} tone={item.expiryDate < today() ? "warn" : undefined} />}
+        {item.storageLocation && <Row label="Location" value={item.storageLocation} />}
+        {item.brand && <Row label="Brand" value={item.brand} />}
+      </Card>
+
+      <div className="grid grid-cols-2 gap-2 mb-5">
+        <Btn onClick={onUse}><Minus size={14} /> Record Usage</Btn>
+        <Btn variant="outline" onClick={onAddStock}><Plus size={14} /> Add Stock</Btn>
+      </div>
+
+      <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>STOCK HISTORY</p>
+      {tx.length === 0 ? (
+        <p className="text-xs" style={{ color: C.grayLight }}>No stock movements recorded yet.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {tx.map((t) => {
+            const meta = TX_LABEL[t.transactionType] || TX_LABEL.adjustment;
+            const qty = Number(t.quantity);
+            return (
+              <Card key={t.id} className="!py-2.5">
+                <div className="flex items-center justify-between mb-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <Badge tone={meta.tone}>{meta.label}</Badge>
+                    {t.reason && <span className="text-[10px]" style={{ color: C.gray }}>{t.reason}</span>}
+                  </div>
+                  <span className="font-display font-bold text-sm" style={{ color: qty >= 0 ? C.green : C.warn }}>
+                    {qty >= 0 ? "+" : ""}{qty} {item.unit}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-[10px]" style={{ color: C.gray }}>
+                  <span>{fmtDate(t.transactionDate)}</span>
+                  <span>{fmt(Math.abs(Number(t.totalCost)))} · balance {t.balanceAfter} {item.unit}</span>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </Screen>
+  );
+}
+
 
 function InventoryModal({ setData, onClose, notify, item }) {
   const isEdit = !!item;
