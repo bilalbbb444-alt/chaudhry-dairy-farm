@@ -1082,17 +1082,6 @@ export default function ChaudhryDairyFarm() {
       {modal === "addCustomer" && (
         <CustomerModal setData={setData} onClose={() => setModal(null)} notify={notify} />
       )}
-      {modal === "quickAdd" && (
-        <QuickAddSheet role={role} onClose={() => setModal(null)} onPick={(m) => {
-          if (m === "aiHealth") {
-            setModal(null);
-            setTab("more");
-            setMoreScreen("aiCare");
-          } else {
-            setModal(m);
-          }
-        }} />
-      )}
 
       {toast && (
         <div className="fixed top-4 left-1/2 z-[60] animate-toast-in" style={{ transform: "translateX(-50%)" }}>
@@ -1124,7 +1113,7 @@ export default function ChaudhryDairyFarm() {
         </div>
       )}
 
-      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} onQuickAdd={() => setModal("quickAdd")} />
+      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} />
     </div>
   );
 }
@@ -1138,12 +1127,10 @@ const fontImport = `
 /* ---------------------------------------------------------------- */
 /*  Bottom Nav                                                       */
 /* ---------------------------------------------------------------- */
-function BottomNav({ tab, setTab, onQuickAdd }) {
+function BottomNav({ tab, setTab }) {
   const items = [
     { key: "dashboard", label: "Home", icon: Home },
     { key: "milk", label: "Milk", icon: Droplet },
-  ];
-  const items2 = [
     { key: "sales", label: "Sales", icon: ShoppingCart },
     { key: "customers", label: "Customers", icon: Users },
     { key: "more", label: "More", icon: MoreHorizontal },
@@ -1169,14 +1156,6 @@ function BottomNav({ tab, setTab, onQuickAdd }) {
     <div className="fixed bottom-0 left-0 right-0 z-40 bg-white" style={{ borderTop: `1px solid ${C.line}`, boxShadow: "0 -2px 10px rgba(31,77,44,0.06)" }}>
       <div className="max-w-md mx-auto flex items-center">
         {items.map(renderTab)}
-        {/* Quick Add — inline within the bar itself (not floating above it) so it
-            can never overlap page content, which is what caused problems before. */}
-        <div className="flex-1 flex justify-center py-1.5">
-          <button onClick={onQuickAdd} aria-label="Quick Add" className="tap flex items-center justify-center" style={{ width: 42, height: 42, borderRadius: "50%", background: C.green, boxShadow: "0 3px 10px rgba(31,77,44,0.35)" }}>
-            <Plus size={19} color="#fff" strokeWidth={2.6} />
-          </button>
-        </div>
-        {items2.map(renderTab)}
       </div>
     </div>
   );
@@ -2373,6 +2352,7 @@ function BillSheet({ data, customer, monthMilk, monthBill, monthPaid, allSales, 
 /* ---------------------------------------------------------------- */
 function MoreMenu({ role, onOpen }) {
   const all = [
+    { key: "aiCare", label: "AI Animal Health", icon: Stethoscope, accent: true },
     { key: "animals", label: "Animals", icon: PawPrint },
     { key: "inventory", label: "Inventory", icon: Package },
     { key: "purchases", label: "Purchases", icon: Truck },
@@ -2388,9 +2368,9 @@ function MoreMenu({ role, onOpen }) {
     <Screen>
       <TopBar title="More" subtitle="Manage every part of your farm" />
       <div className="grid grid-cols-3 gap-2.5">
-        {items.map(({ key, label, icon: Icon }) => (
+        {items.map(({ key, label, icon: Icon, accent }) => (
           <button key={key} onClick={() => onOpen(key)} className="rounded-2xl bg-white flex flex-col items-center justify-center gap-2 py-5 active:opacity-80" style={{ border: `1px solid ${C.line}` }}>
-            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: C.greenPale, color: C.green }}><Icon size={19} /></div>
+            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: accent ? "#E5F0EE" : C.greenPale, color: accent ? "#2C7A6E" : C.green }}><Icon size={19} /></div>
             <span className="text-[11px] font-semibold text-center" style={{ color: C.text }}>{label}</span>
           </button>
         ))}
