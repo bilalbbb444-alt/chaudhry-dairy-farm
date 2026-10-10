@@ -852,6 +852,7 @@ export default function ChaudhryDairyFarm() {
   const [moreScreen, setMoreScreen] = useState(null);
   const [custId, setCustId] = useState(null);
   const [animalId, setAnimalId] = useState(null);
+  const [supplierId, setSupplierId] = useState(null);
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState(null);
   const [unlocked, setUnlocked] = useState(false);
@@ -1117,7 +1118,13 @@ export default function ChaudhryDairyFarm() {
         <InventoryScreen data={data} setData={setData} onBack={() => setMoreScreen(null)} notify={notify} />
       )}
       {tab === "more" && moreScreen === "purchases" && (
-        <PurchasesScreen data={data} setData={setData} onBack={() => setMoreScreen(null)} notify={notify} />
+        <PurchasesScreen data={data} setData={setData} onBack={() => setMoreScreen(null)} notify={notify} onOpenSuppliers={() => setMoreScreen("suppliers")} />
+      )}
+      {tab === "more" && moreScreen === "suppliers" && !supplierId && (
+        <SuppliersScreen data={data} setData={setData} onBack={() => setMoreScreen(null)} notify={notify} onOpenSupplier={setSupplierId} />
+      )}
+      {tab === "more" && moreScreen === "suppliers" && supplierId && (
+        <SupplierProfile data={data} setData={setData} supplierId={supplierId} onBack={() => setSupplierId(null)} notify={notify} />
       )}
       {tab === "more" && moreScreen === "expenses" && (
         <ExpensesScreen data={data} setData={setData} onBack={() => setMoreScreen(null)} notify={notify} />
@@ -1184,7 +1191,7 @@ export default function ChaudhryDairyFarm() {
         </div>
       )}
 
-      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); }} />
+      <BottomNav tab={tab} setTab={(t) => { setTab(t); setMoreScreen(null); setCustId(null); setAnimalId(null); setSupplierId(null); }} />
     </div>
   );
 }
@@ -2427,12 +2434,13 @@ function MoreMenu({ role, onOpen }) {
     { key: "animals", label: "Animals", icon: PawPrint },
     { key: "inventory", label: "Inventory", icon: Package },
     { key: "purchases", label: "Purchases", icon: Truck },
+    { key: "suppliers", label: "Suppliers", icon: Users },
     { key: "expenses", label: "Expenses", icon: Wallet },
     { key: "employees", label: "Employees", icon: UserCog },
     { key: "reports", label: "Reports", icon: FileText },
     { key: "settings", label: "Settings", icon: SettingsIcon },
   ];
-  const hiddenForEmployee = ["purchases", "expenses", "reports"];
+  const hiddenForEmployee = ["purchases", "suppliers", "expenses", "reports"];
   const items = role === "Employee" ? all.filter((i) => !hiddenForEmployee.includes(i.key)) : all;
 
   return (
@@ -3213,38 +3221,47 @@ function InventoryModal({ setData, onClose, notify, item }) {
 /* ---------------------------------------------------------------- */
 /*  Purchases                                                          */
 /* ---------------------------------------------------------------- */
-function PurchasesScreen({ data, setData, onBack, notify }) {
+function PurchasesScreen({ data, setData, onBack, notify, onOpenSuppliers }) {
   const [showAdd, setShowAdd] = useState(false);
   const [statementSupplier, setStatementSupplier] = useState(null);
-  const totalDue = data.purchases.reduce((s, p) => s + p.credit, 0);
+  const activePurchases = data.purchases.filter((p) => !p.voided);
+  const totalDue = activePurchases.reduce((s, p) => s + p.credit, 0);
 
-  const suppliers = Object.values(
-    data.purchases.reduce((acc, p) => {
-      const name = p.supplier || "Unknown";
-      if (!acc[name]) acc[name] = { name, total: 0, paid: 0, credit: 0, count: 0 };
-      acc[name].total += p.total;
-      acc[name].paid += p.paid;
-      acc[name].credit += p.credit;
-      acc[name].count += 1;
+  // Group by real supplier where linked; fall back to the free-text name for
+  // older purchases recorded before the Suppliers module existed.
+  const bySupplier = Object.values(
+    activePurchases.reduce((acc, p) => {
+      const key = p.supplierId || `legacy:${p.supplier || "Unknown"}`;
+      const name = data.suppliers.find((s) => s.id === p.supplierId)?.name || p.supplier || "Unknown";
+      if (!acc[key]) acc[key] = { key, name, total: 0, paid: 0, credit: 0, count: 0 };
+      acc[key].total += p.total;
+      acc[key].paid += p.paid;
+      acc[key].credit += p.credit;
+      acc[key].count += 1;
       return acc;
     }, {})
   ).sort((a, b) => b.credit - a.credit || b.total - a.total);
 
   const removePurchase = async (p) => {
-    if (!window.confirm("Delete this purchase? Stock added by it will be reversed.")) return;
+    if (!window.confirm("Void this purchase? Stock will be reversed if it hasn't been used yet.")) return;
     try {
-      await dbDelete("purchases", p.id);
-      const item = data.inventory.find((i) => i.name === p.product);
-      let updatedItem = null;
-      if (item) updatedItem = await dbUpdate("inventory", item.id, { currentStock: Math.max(0, item.currentStock - p.quantity) }, item);
+      await withTimeout(supabase.rpc("void_purchase", { p_purchase_id: p.id }));
+      const [pur, inv, tx, supPay] = await Promise.all([
+        supabase.from("purchases").select("*").eq("farm_id", CURRENT_FARM_ID),
+        supabase.from("inventory").select("*").eq("farm_id", CURRENT_FARM_ID),
+        supabase.from("inventory_transactions").select("*").eq("farm_id", CURRENT_FARM_ID).order("transaction_date", { ascending: false }).limit(500),
+        supabase.from("supplier_payments").select("*").eq("farm_id", CURRENT_FARM_ID),
+      ]);
       setData((d) => ({
         ...d,
-        purchases: d.purchases.filter((x) => x.id !== p.id),
-        inventory: updatedItem ? d.inventory.map((i) => i.id === updatedItem.id ? updatedItem : i) : d.inventory,
+        purchases: (pur.data || []).map(rowToCamel),
+        inventory: (inv.data || []).map(rowToCamel),
+        invTransactions: (tx.data || []).map(rowToCamel),
+        supplierPayments: (supPay.data || []).map(rowToCamel),
       }));
-      notify("Purchase deleted");
+      notify("Purchase voided");
     } catch (e) {
-      notify("Could not delete purchase");
+      notify(friendlyDbError(e));
     }
   };
 
@@ -3254,12 +3271,14 @@ function PurchasesScreen({ data, setData, onBack, notify }) {
         <button onClick={() => setShowAdd(true)} className="p-2 rounded-full" style={{ background: C.green }}><Plus size={18} color="white" /></button>
       } />
 
-      {suppliers.length > 0 && (
+      <Btn variant="outline" full className="mb-4" onClick={onOpenSuppliers}><Truck size={15} /> Manage Suppliers</Btn>
+
+      {bySupplier.length > 0 && (
         <>
           <p className="text-xs font-semibold mb-2" style={{ color: C.gray }}>SUPPLIERS</p>
           <div className="flex flex-col gap-2 mb-5">
-            {suppliers.map((s) => (
-              <Card key={s.name} className="!py-3">
+            {bySupplier.map((s) => (
+              <Card key={s.key} className="!py-3">
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-sm font-semibold" style={{ color: C.text }}>{s.name}</p>
                   <Badge tone={s.credit > 0 ? "warn" : "green"}>{s.credit > 0 ? "CREDIT DUE" : "SETTLED"}</Badge>
@@ -3278,12 +3297,12 @@ function PurchasesScreen({ data, setData, onBack, notify }) {
       ) : (
         <div className="flex flex-col gap-2">
           {[...data.purchases].sort((a, b) => b.date.localeCompare(a.date)).map((p, i) => (
-            <Card key={p.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }}>
+            <Card key={p.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms`, opacity: p.voided ? 0.55 : 1 }}>
               <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-semibold" style={{ color: C.text }}>{p.supplier}</p>
                 <div className="flex items-center gap-1.5">
-                  <Badge tone={p.status === "Paid" ? "green" : "warn"}>{p.status}</Badge>
-                  <RowActions onDelete={() => removePurchase(p)} />
+                  <Badge tone={p.voided ? "gray" : p.status === "Paid" ? "green" : "warn"}>{p.voided ? "Voided" : p.status}</Badge>
+                  {!p.voided && <RowActions onDelete={() => removePurchase(p)} />}
                 </div>
               </div>
               <p className="text-[11px] mb-1" style={{ color: C.gray }}>{fmtDate(p.date)} · {p.product} · {p.quantity} {p.unit} @ {fmt(p.unitPrice)}</p>
@@ -3295,12 +3314,12 @@ function PurchasesScreen({ data, setData, onBack, notify }) {
           ))}
         </div>
       )}
-      {showAdd && <PurchaseModal data={data} setData={setData} onClose={() => setShowAdd(false)} notify={notify} />}
+      {showAdd && <NewPurchaseModal data={data} setData={setData} onClose={() => setShowAdd(false)} notify={notify} />}
       {statementSupplier && (
         <SupplierStatementSheet
           data={data}
           supplierName={statementSupplier}
-          purchases={data.purchases.filter((p) => (p.supplier || "Unknown") === statementSupplier)}
+          purchases={data.purchases.filter((p) => !p.voided && (data.suppliers.find((s) => s.id === p.supplierId)?.name || p.supplier || "Unknown") === statementSupplier)}
           onClose={() => setStatementSupplier(null)}
         />
       )}
@@ -3398,96 +3417,421 @@ function SupplierStatementSheet({ data, supplierName, purchases, onClose }) {
   );
 }
 
-function PurchaseModal({ data, setData, onClose, notify }) {
-  const [mode, setMode] = useState(data.inventory.length === 0 ? "new" : "existing");
-  const [f, setF] = useState({
-    supplier: "", productId: data.inventory[0]?.id || "", quantity: "", unitPrice: "", paid: "",
-    newName: "", newCategory: "Feed", newUnit: "kg",
-  });
-  const existingProduct = data.inventory.find((i) => i.id === f.productId);
-  const unit = mode === "new" ? f.newUnit : (existingProduct?.unit || "");
-  const total = (parseFloat(f.quantity) || 0) * (parseFloat(f.unitPrice) || 0);
-  const paid = parseFloat(f.paid) || 0;
-  const credit = Math.max(total - paid, 0);
-
+function NewPurchaseModal({ data, setData, onClose, notify, presetSupplierId }) {
+  const [supplierId, setSupplierId] = useState(presetSupplierId || "");
+  const [newSupplierName, setNewSupplierName] = useState("");
+  const [addingSupplier, setAddingSupplier] = useState(false);
+  const [date, setDate] = useState(today());
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [discount, setDiscount] = useState("");
+  const [paid, setPaid] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("Cash");
+  const [items, setItems] = useState([{ key: uid(), inventoryItemId: "", newName: "", quantity: "", unit: "kg", unitCost: "" }]);
   const [saving, setSaving] = useState(false);
-  const save = async () => {
-    if (!f.supplier || !f.quantity) return;
-    if (mode === "existing" && !existingProduct) return;
-    if (mode === "new" && !f.newName) return;
-    const status = credit === 0 ? "Paid" : paid === 0 ? "Unpaid" : "Partial";
-    const qty = parseFloat(f.quantity);
-    const price = parseFloat(f.unitPrice) || 0;
+  const [err, setErr] = useState("");
 
+  const updateItem = (key, patch) => setItems((prev) => prev.map((it) => it.key === key ? { ...it, ...patch } : it));
+  const addRow = () => setItems((prev) => [...prev, { key: uid(), inventoryItemId: "", newName: "", quantity: "", unit: "kg", unitCost: "" }]);
+  const removeRow = (key) => setItems((prev) => prev.length > 1 ? prev.filter((it) => it.key !== key) : prev);
+
+  const lineTotal = (it) => (parseFloat(it.quantity) || 0) * (parseFloat(it.unitCost) || 0);
+  const subtotal = items.reduce((s, it) => s + lineTotal(it), 0);
+  const disc = parseFloat(discount) || 0;
+  const grandTotal = Math.max(subtotal - disc, 0);
+  const paidNum = parseFloat(paid) || 0;
+  const remaining = Math.max(grandTotal - paidNum, 0);
+
+  const save = async () => {
+    setErr("");
+    const validItems = items.filter((it) => (parseFloat(it.quantity) || 0) > 0);
+    if (validItems.length === 0) { setErr("Add at least one item with a quantity."); return; }
+    for (const it of validItems) {
+      if (!it.inventoryItemId && !it.newName.trim()) { setErr("Every item needs a name or an existing inventory item selected."); return; }
+    }
     setSaving(true);
     try {
-      let productName, productUnit, updatedInventoryItem = null, newInventoryItem = null;
-      if (mode === "new") {
-        newInventoryItem = await dbInsert("inventory", { name: f.newName, category: f.newCategory, unit: f.newUnit, currentStock: qty, minimumStock: 0, avgCost: price });
-        productName = newInventoryItem.name; productUnit = newInventoryItem.unit;
-      } else {
-        updatedInventoryItem = await dbUpdate("inventory", existingProduct.id, { currentStock: existingProduct.currentStock + qty }, existingProduct);
-        productName = existingProduct.name; productUnit = existingProduct.unit;
-      }
-      const purchase = await dbInsert("purchases", { supplier: f.supplier, date: today(), product: productName, quantity: qty, unit: productUnit, unitPrice: price, total, paid, credit, status });
+      const supplier = data.suppliers.find((s) => s.id === supplierId);
+      const payloadItems = [];
+      let inventory = data.inventory;
 
+      for (const it of validItems) {
+        let invId = it.inventoryItemId || null;
+        let itemName = it.inventoryItemId ? (inventory.find((i) => i.id === it.inventoryItemId)?.name || it.newName) : it.newName;
+        if (!invId && it.newName.trim()) {
+          // brand-new inventory item created alongside this purchase
+          const row = await dbInsert("inventory", {
+            name: it.newName.trim(), category: "Feed", unit: it.unit,
+            currentStock: 0, minimumStock: 0, avgCost: 0,
+          });
+          inventory = [...inventory, row];
+          invId = row.id;
+          itemName = row.name;
+        }
+        payloadItems.push({
+          inventory_item_id: invId, item_name: itemName,
+          quantity: parseFloat(it.quantity), unit: it.unit, unit_cost: parseFloat(it.unitCost) || 0,
+        });
+      }
+
+      const result = await rpcRecordPurchase({
+        supplierId: supplierId || null,
+        supplierName: supplier ? supplier.name : (newSupplierName.trim() || null),
+        date, invoiceNumber, discount: disc, paid: paidNum, paymentMethod, notes: null,
+        items: payloadItems,
+      });
+
+      // refresh from server — the RPC touched purchases, purchase_items,
+      // inventory, inventory_transactions and possibly supplier_payments.
+      const [pur, pItems, inv, tx, supPay] = await Promise.all([
+        supabase.from("purchases").select("*").eq("farm_id", CURRENT_FARM_ID),
+        supabase.from("purchase_items").select("*").eq("farm_id", CURRENT_FARM_ID),
+        supabase.from("inventory").select("*").eq("farm_id", CURRENT_FARM_ID),
+        supabase.from("inventory_transactions").select("*").eq("farm_id", CURRENT_FARM_ID).order("transaction_date", { ascending: false }).limit(500),
+        supabase.from("supplier_payments").select("*").eq("farm_id", CURRENT_FARM_ID),
+      ]);
       setData((d) => ({
         ...d,
-        purchases: [...d.purchases, purchase],
-        inventory: newInventoryItem
-          ? [...d.inventory, newInventoryItem]
-          : d.inventory.map((i) => i.id === updatedInventoryItem.id ? updatedInventoryItem : i),
+        inventory: inventory.length !== d.inventory.length ? inventory : (inv.data || []).map(rowToCamel),
+        purchases: (pur.data || []).map(rowToCamel),
+        purchaseItems: (pItems.data || []).map(rowToCamel),
+        invTransactions: (tx.data || []).map(rowToCamel),
+        supplierPayments: (supPay.data || []).map(rowToCamel),
       }));
-      notify("Purchase recorded, stock updated");
+      // one more pass to be certain inventory reflects the server (new items + updated stock)
+      const invFinal = await supabase.from("inventory").select("*").eq("farm_id", CURRENT_FARM_ID);
+      setData((d) => ({ ...d, inventory: (invFinal.data || []).map(rowToCamel) }));
+
+      notify(`Purchase recorded · ${result.status}`);
       onClose();
     } catch (e) {
-      notify("Could not save purchase");
+      setErr(friendlyDbError(e));
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Sheet title="Add Purchase" onClose={onClose} footer={<Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : `Save Purchase · ${fmt(total)}`}</Btn>}>
-      <Field label="Supplier"><input className={inputCls} style={inputStyle} value={f.supplier} onChange={(e) => setF({ ...f, supplier: e.target.value })} placeholder="Supplier name" /></Field>
+    <Sheet title="New Purchase" onClose={onClose} footer={
+      <Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : `Save Purchase · ${fmt(grandTotal)}`}</Btn>
+    }>
+      <Field label="Supplier">
+        {addingSupplier ? (
+          <div className="flex gap-2">
+            <input className={inputCls} style={inputStyle} value={newSupplierName} onChange={(e) => setNewSupplierName(e.target.value)} placeholder="New supplier name" />
+            <button onClick={() => { setAddingSupplier(false); setNewSupplierName(""); }} className="px-3 rounded-xl text-xs font-semibold" style={{ border: `1px solid ${C.line}`, color: C.gray }}>Cancel</button>
+          </div>
+        ) : (
+          <select className={inputCls} style={inputStyle} value={supplierId} onChange={(e) => {
+            if (e.target.value === "__new__") { setAddingSupplier(true); setSupplierId(""); }
+            else setSupplierId(e.target.value);
+          }}>
+            <option value="">No supplier / one-time</option>
+            {data.suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            <option value="__new__">+ Add New Supplier</option>
+          </select>
+        )}
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Purchase Date"><input type="date" max={today()} className={inputCls} style={inputStyle} value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+        <Field label="Invoice # (optional)"><input className={inputCls} style={inputStyle} value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} /></Field>
+      </div>
 
-      {data.inventory.length > 0 && (
-        <div className="flex gap-2 mb-3">
-          <button onClick={() => setMode("existing")} className="flex-1 rounded-xl py-2 text-xs font-semibold" style={mode === "existing" ? { background: C.green, color: C.white } : { background: C.white, color: C.gray, border: `1px solid ${C.line}` }}>Existing Item</button>
-          <button onClick={() => setMode("new")} className="flex-1 rounded-xl py-2 text-xs font-semibold" style={mode === "new" ? { background: C.green, color: C.white } : { background: C.white, color: C.gray, border: `1px solid ${C.line}` }}>New Item</button>
+      <p className="text-xs font-semibold mt-2 mb-2" style={{ color: C.gray }}>PURCHASE ITEMS</p>
+      <div className="flex flex-col gap-3 mb-3">
+        {items.map((it) => (
+          <Card key={it.key} className="!p-3">
+            <div className="flex items-center justify-between mb-2">
+              <select
+                className="flex-1 text-sm rounded-lg px-2 py-1.5 mr-2"
+                style={{ border: `1px solid ${C.line}`, color: C.text }}
+                value={it.inventoryItemId}
+                onChange={(e) => {
+                  const inv = data.inventory.find((i) => i.id === e.target.value);
+                  updateItem(it.key, { inventoryItemId: e.target.value, unit: inv ? inv.unit : it.unit, unitCost: inv && inv.avgCost ? String(inv.avgCost) : it.unitCost });
+                }}
+              >
+                <option value="">+ New item…</option>
+                {data.inventory.filter((i) => !i.archived).map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+              </select>
+              {items.length > 1 && <button onClick={() => removeRow(it.key)} className="p-1"><X size={16} color={C.danger} /></button>}
+            </div>
+            {!it.inventoryItemId && (
+              <input className={inputCls} style={{ ...inputStyle, marginBottom: 8 }} placeholder="New item name" value={it.newName} onChange={(e) => updateItem(it.key, { newName: e.target.value })} />
+            )}
+            <div className="grid grid-cols-3 gap-2">
+              <input type="number" inputMode="decimal" className={inputCls} style={inputStyle} placeholder="Qty" value={it.quantity} onChange={(e) => updateItem(it.key, { quantity: e.target.value })} />
+              <select className={inputCls} style={inputStyle} value={it.unit} onChange={(e) => updateItem(it.key, { unit: e.target.value })}>
+                {["kg","gram","liter","ml","bag","bottle","piece","packet","ton","bale"].map((u) => <option key={u}>{u}</option>)}
+              </select>
+              <input type="number" inputMode="decimal" className={inputCls} style={inputStyle} placeholder="Unit cost" value={it.unitCost} onChange={(e) => updateItem(it.key, { unitCost: e.target.value })} />
+            </div>
+            {lineTotal(it) > 0 && <p className="text-right text-xs font-bold mt-1.5" style={{ color: C.text }}>{fmt(lineTotal(it))}</p>}
+          </Card>
+        ))}
+      </div>
+      <Btn variant="ghost" full className="mb-4" onClick={addRow}><Plus size={14} /> Add Another Item</Btn>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Discount"><input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={discount} onChange={(e) => setDiscount(e.target.value)} placeholder="0" /></Field>
+        <Field label="Paid Now"><input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={paid} onChange={(e) => setPaid(e.target.value)} placeholder="0" /></Field>
+      </div>
+      <Field label="Payment Method">
+        <select className={inputCls} style={inputStyle} value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+          <option>Cash</option><option>Bank</option><option>JazzCash</option><option>Easypaisa</option>
+        </select>
+      </Field>
+
+      <Card style={{ background: C.creamDark, border: "none" }} className="mb-2">
+        <Row label="Subtotal" value={fmt(subtotal)} />
+        {disc > 0 && <Row label="Discount" value={`-${fmt(disc)}`} />}
+        <Row label="Grand Total" value={fmt(grandTotal)} bold />
+        <Row label="Remaining (Supplier Due)" value={fmt(remaining)} tone={remaining > 0 ? "warn" : "green"} />
+      </Card>
+      {err && <p className="text-xs mb-1" style={{ color: C.danger }}>{err}</p>}
+    </Sheet>
+  );
+}
+
+/* ---------------------------------------------------------------- */
+/*  Suppliers                                                          */
+/* ---------------------------------------------------------------- */
+function SuppliersScreen({ data, setData, onBack, notify, onOpenSupplier }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const supplierStats = (s) => {
+    const purchases = data.purchases.filter((p) => p.supplierId === s.id && !p.voided);
+    const totalPurchases = purchases.reduce((sum, p) => sum + p.total, 0);
+    const totalPaid = purchases.reduce((sum, p) => sum + p.paid, 0);
+    const outstanding = purchases.reduce((sum, p) => sum + p.credit, 0);
+    return { totalPurchases, totalPaid, outstanding };
+  };
+  return (
+    <Screen>
+      <TopBar title="Suppliers" subtitle={`${data.suppliers.length} suppliers`} onBack={onBack} right={
+        <button onClick={() => setShowAdd(true)} className="p-2 rounded-full" style={{ background: C.green }}><Plus size={18} color="white" /></button>
+      } />
+      {data.suppliers.length === 0 ? (
+        <Empty icon={<Truck size={22} color={C.green} />} title="No suppliers yet" note="Add a supplier to start tracking purchases and balances." actionLabel="Add Supplier" onAction={() => setShowAdd(true)} />
+      ) : (
+        <div className="flex flex-col gap-2">
+          {data.suppliers.map((s, i) => {
+            const { totalPurchases, outstanding } = supplierStats(s);
+            return (
+              <Card key={s.id} className="!py-3 animate-row-in" style={{ animationDelay: `${Math.min(i, 10) * 30}ms` }} onClick={() => onOpenSupplier(s.id)}>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-sm font-semibold" style={{ color: C.text }}>{s.name}</p>
+                  <Badge tone={outstanding > 0 ? "warn" : "green"}>{outstanding > 0 ? "Due" : "Settled"}</Badge>
+                </div>
+                <div className="flex items-center justify-between text-xs" style={{ color: C.gray }}>
+                  <span>{s.phone || "No phone"}</span>
+                  <span className="font-display font-bold" style={{ color: outstanding > 0 ? C.warn : C.text }}>{fmt(outstanding)}</span>
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+      {showAdd && <SupplierModal setData={setData} onClose={() => setShowAdd(false)} notify={notify} />}
+    </Screen>
+  );
+}
+
+function SupplierModal({ setData, onClose, notify, supplier }) {
+  const isEdit = !!supplier;
+  const [f, setF] = useState(supplier
+    ? { name: supplier.name, phone: supplier.phone || "", whatsapp: supplier.whatsapp || "", address: supplier.address || "", notes: supplier.notes || "" }
+    : { name: "", phone: "", whatsapp: "", address: "", notes: "" });
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!f.name.trim()) return;
+    setSaving(true);
+    try {
+      if (isEdit) {
+        const row = await dbUpdate("suppliers", supplier.id, f, supplier);
+        setData((d) => ({ ...d, suppliers: d.suppliers.map((s) => s.id === supplier.id ? row : s) }));
+      } else {
+        const row = await dbInsert("suppliers", { ...f, openingBalance: 0, status: "Active" });
+        setData((d) => ({ ...d, suppliers: [...d.suppliers, row] }));
+      }
+      notify(isEdit ? "Supplier updated" : "Supplier added");
+      onClose();
+    } catch (e) {
+      notify("Could not save supplier");
+    } finally { setSaving(false); }
+  };
+  return (
+    <Sheet title={isEdit ? "Edit Supplier" : "Add Supplier"} onClose={onClose} footer={<Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Supplier"}</Btn>}>
+      <Field label="Supplier Name"><input className={inputCls} style={inputStyle} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
+      <Field label="Phone"><input className={inputCls} style={inputStyle} value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></Field>
+      <Field label="WhatsApp"><input className={inputCls} style={inputStyle} value={f.whatsapp} onChange={(e) => setF({ ...f, whatsapp: e.target.value })} placeholder="If different from phone" /></Field>
+      <Field label="Address"><input className={inputCls} style={inputStyle} value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} /></Field>
+      <Field label="Notes"><input className={inputCls} style={inputStyle} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></Field>
+    </Sheet>
+  );
+}
+
+function SupplierProfile({ data, setData, supplierId, onBack, notify }) {
+  const s = data.suppliers.find((x) => x.id === supplierId);
+  const [tab, setTab] = useState("Overview");
+  const [showEdit, setShowEdit] = useState(false);
+  const [showPurchase, setShowPurchase] = useState(false);
+  const [showPayment, setShowPayment] = useState(false);
+  if (!s) return null;
+
+  const purchases = data.purchases.filter((p) => p.supplierId === s.id).sort((a, b) => b.date.localeCompare(a.date));
+  const payments = data.supplierPayments.filter((p) => p.supplierId === s.id).sort((a, b) => b.date.localeCompare(a.date));
+  const activePurchases = purchases.filter((p) => !p.voided);
+  const totalPurchases = activePurchases.reduce((sum, p) => sum + p.total, 0);
+  const totalPaid = activePurchases.reduce((sum, p) => sum + p.paid, 0);
+  const outstanding = activePurchases.reduce((sum, p) => sum + p.credit, 0);
+
+  const remove = async () => {
+    if (!window.confirm(`Delete ${s.name}? Their purchase history stays on record but will no longer be linked to a supplier.`)) return;
+    try {
+      await dbDelete("suppliers", s.id);
+      setData((d) => ({ ...d, suppliers: d.suppliers.filter((x) => x.id !== s.id) }));
+      notify("Supplier deleted");
+      onBack();
+    } catch (e) { notify("Could not delete supplier"); }
+  };
+
+  return (
+    <Screen>
+      <TopBar title={s.name} subtitle={s.address} onBack={onBack} right={
+        <div className="flex items-center gap-1">
+          <button onClick={() => setShowEdit(true)} className="p-2 rounded-full tap active:bg-black/5"><Pencil size={16} color={C.gray} /></button>
+          <button onClick={remove} className="p-2 rounded-full tap active:bg-black/5"><Trash2 size={16} color={C.danger} /></button>
+        </div>
+      } />
+
+      <div className="grid grid-cols-2 gap-2 mb-4">
+        {s.phone ? (
+          <Btn variant="ghost" onClick={() => window.open(`tel:${s.phone}`)}><Phone size={14} /> Call</Btn>
+        ) : <Btn variant="ghost" disabled><Phone size={14} /> Call</Btn>}
+        {(s.whatsapp || s.phone) ? (
+          <Btn variant="ghost" onClick={() => window.open(`https://wa.me/${(s.whatsapp || s.phone).replace(/\D/g, "")}`, "_blank")}><span>💬</span> WhatsApp</Btn>
+        ) : <Btn variant="ghost" disabled><span>💬</span> WhatsApp</Btn>}
+        <Btn onClick={() => setShowPurchase(true)}><Plus size={14} /> New Purchase</Btn>
+        <Btn variant="outline" onClick={() => setShowPayment(true)}><Banknote size={14} /> Add Payment</Btn>
+      </div>
+
+      <Card className="mb-4">
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div>
+            <p className="text-[10px]" style={{ color: C.gray }}>Total Purchases</p>
+            <p className="font-display text-sm font-bold" style={{ color: C.text }}>{fmt(totalPurchases)}</p>
+          </div>
+          <div>
+            <p className="text-[10px]" style={{ color: C.gray }}>Paid</p>
+            <p className="font-display text-sm font-bold" style={{ color: C.green }}>{fmt(totalPaid)}</p>
+          </div>
+          <div>
+            <p className="text-[10px]" style={{ color: C.gray }}>Outstanding</p>
+            <p className="font-display text-sm font-bold" style={{ color: outstanding > 0 ? C.warn : C.green }}>{fmt(outstanding)}</p>
+          </div>
+        </div>
+      </Card>
+
+      <Chips options={["Overview", "Purchases", "Payments"]} value={tab} onChange={setTab} />
+
+      {tab === "Overview" && (
+        <Card>
+          <Row label="Phone" value={s.phone || "—"} />
+          <Row label="WhatsApp" value={s.whatsapp || "—"} />
+          <Row label="Address" value={s.address || "—"} />
+          {s.notes && <Row label="Notes" value={s.notes} />}
+        </Card>
+      )}
+      {tab === "Purchases" && (
+        purchases.length === 0 ? <p className="text-xs" style={{ color: C.grayLight }}>No purchases yet.</p> :
+        <div className="flex flex-col gap-2">
+          {purchases.map((p) => (
+            <Card key={p.id} className="!py-2.5">
+              <div className="flex items-center justify-between mb-0.5">
+                <p className="text-xs font-semibold" style={{ color: C.text }}>{p.product}{p.voided ? " (Voided)" : ""}</p>
+                <Badge tone={p.voided ? "gray" : p.status === "Paid" ? "green" : "warn"}>{p.voided ? "Voided" : p.status}</Badge>
+              </div>
+              <div className="flex items-center justify-between text-[10px]" style={{ color: C.gray }}>
+                <span>{fmtDate(p.date)}</span>
+                <span className="font-display font-bold text-xs" style={{ color: C.text }}>{fmt(p.total)}</span>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+      {tab === "Payments" && (
+        payments.length === 0 ? <p className="text-xs" style={{ color: C.grayLight }}>No payments yet.</p> :
+        <div className="flex flex-col gap-2">
+          {payments.map((p) => (
+            <Card key={p.id} className="!py-2.5 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold" style={{ color: C.text }}>{p.method}</p>
+                <p className="text-[10px]" style={{ color: C.gray }}>{fmtDate(p.date)}</p>
+              </div>
+              <span className="font-display font-bold text-xs" style={{ color: C.green }}>{fmt(p.amount)}</span>
+            </Card>
+          ))}
         </div>
       )}
 
-      {mode === "existing" && data.inventory.length > 0 ? (
-        <Field label="Product">
-          <select className={inputCls} style={inputStyle} value={f.productId} onChange={(e) => setF({ ...f, productId: e.target.value })}>
-            {data.inventory.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-          </select>
-        </Field>
-      ) : (
-        <>
-          <Field label="Product Name"><input className={inputCls} style={inputStyle} value={f.newName} onChange={(e) => setF({ ...f, newName: e.target.value })} placeholder="e.g. Maize" /></Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Category">
-              <select className={inputCls} style={inputStyle} value={f.newCategory} onChange={(e) => setF({ ...f, newCategory: e.target.value })}>
-                <option>Feed</option><option>Minerals</option><option>Medicines</option><option>Cleaning</option><option>Equipment</option><option>Other</option>
-              </select>
-            </Field>
-            <Field label="Unit">
-              <select className={inputCls} style={inputStyle} value={f.newUnit} onChange={(e) => setF({ ...f, newUnit: e.target.value })}>
-                <option>kg</option><option>bag</option><option>liter</option><option>unit</option>
-              </select>
-            </Field>
-          </div>
-        </>
-      )}
+      {showEdit && <SupplierModal setData={setData} supplier={s} onClose={() => setShowEdit(false)} notify={notify} />}
+      {showPurchase && <NewPurchaseModal data={data} setData={setData} presetSupplierId={s.id} onClose={() => setShowPurchase(false)} notify={notify} />}
+      {showPayment && <SupplierPaymentModal data={data} setData={setData} supplier={s} onClose={() => setShowPayment(false)} notify={notify} />}
+    </Screen>
+  );
+}
 
-      <div className="grid grid-cols-2 gap-3">
-        <Field label={`Quantity (${unit || ""})`}><input type="number" className={inputCls} style={inputStyle} value={f.quantity} onChange={(e) => setF({ ...f, quantity: e.target.value })} /></Field>
-        <Field label="Unit Price"><input type="number" className={inputCls} style={inputStyle} value={f.unitPrice} onChange={(e) => setF({ ...f, unitPrice: e.target.value })} /></Field>
-      </div>
-      <Field label="Paid Amount"><input type="number" className={inputCls} style={inputStyle} value={f.paid} onChange={(e) => setF({ ...f, paid: e.target.value })} placeholder="0" /></Field>
-      <p className="text-xs" style={{ color: C.gray }}>Credit remaining: <strong style={{ color: C.warn }}>{fmt(credit)}</strong></p>
+function SupplierPaymentModal({ data, setData, supplier, onClose, notify }) {
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("Cash");
+  const [saving, setSaving] = useState(false);
+
+  // apply payment to the oldest unpaid purchases first, so per-purchase credit stays accurate
+  const save = async () => {
+    const amt = parseFloat(amount);
+    if (!amt || amt <= 0) return;
+    setSaving(true);
+    try {
+      let remaining = amt;
+      const unpaid = data.purchases
+        .filter((p) => p.supplierId === supplier.id && !p.voided && p.credit > 0)
+        .sort((a, b) => a.date.localeCompare(b.date));
+      const purchaseUpdates = [];
+      for (const p of unpaid) {
+        if (remaining <= 0) break;
+        const applied = Math.min(remaining, p.credit);
+        const newPaid = p.paid + applied;
+        const newCredit = p.credit - applied;
+        purchaseUpdates.push({ id: p.id, paid: newPaid, credit: newCredit, status: newCredit <= 0 ? "Paid" : "Partial" });
+        remaining -= applied;
+      }
+      for (const u of purchaseUpdates) {
+        await dbUpdate("purchases", u.id, { paid: u.paid, credit: u.credit, status: u.status });
+      }
+      const payRow = await dbInsert("supplierPayments", { supplierId: supplier.id, amount: amt, date: today(), method, reference: "", notes: "" });
+      setData((d) => ({
+        ...d,
+        supplierPayments: [...d.supplierPayments, payRow],
+        purchases: d.purchases.map((p) => {
+          const u = purchaseUpdates.find((x) => x.id === p.id);
+          return u ? { ...p, paid: u.paid, credit: u.credit, status: u.status } : p;
+        }),
+      }));
+      notify("Payment recorded");
+      onClose();
+    } catch (e) {
+      notify("Could not save payment");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Sheet title={`Pay ${supplier.name}`} onClose={onClose} footer={<Btn full onClick={save} disabled={saving}>{saving ? "Saving…" : "Save Payment"}</Btn>}>
+      <Field label="Amount"><input type="number" inputMode="decimal" className={inputCls} style={inputStyle} value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0" /></Field>
+      <Field label="Method">
+        <select className={inputCls} style={inputStyle} value={method} onChange={(e) => setMethod(e.target.value)}>
+          <option>Cash</option><option>Bank</option><option>JazzCash</option><option>Easypaisa</option>
+        </select>
+      </Field>
+      <p className="text-[11px]" style={{ color: C.gray }}>Applied to the oldest unpaid purchases first.</p>
     </Sheet>
   );
 }
